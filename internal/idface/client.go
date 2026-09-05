@@ -46,6 +46,11 @@ func (f *FlexStr) UnmarshalJSON(b []byte) error {
 
 func (f FlexStr) String() string { return string(f) }
 
+// AccessLogsBatchLimit é o tamanho do lote pedido ao aparelho em cada
+// load_objects de access_logs. Exportado para o collector saber quando um lote
+// veio "cheio" (len == limit) e, portanto, ainda há backlog para drenar.
+const AccessLogsBatchLimit = 500
+
 // AccessLog é uma batida (access_logs) do aparelho.
 type AccessLog struct {
 	Id         FlexStr `json:"id"`
@@ -213,7 +218,7 @@ func (c *Client) EnsureSession(ctx context.Context) error {
 }
 
 // LoadNewAccessLogs busca as batidas novas: event=7 e id > cursor, ordenadas
-// por id, limite 500. Espelha fetchNewLogs do Node.
+// por id, limite AccessLogsBatchLimit. Espelha fetchNewLogs do Node.
 //
 // ATENÇÃO: no request ao device, os valores de id e event são NÚMEROS (não
 // string). Só no /dao do Thera é que viram string.
@@ -225,7 +230,7 @@ func (c *Client) LoadNewAccessLogs(ctx context.Context, cursor int64) ([]AccessL
 			{"object": "access_logs", "field": "event", "operator": "=", "value": 7},
 		},
 		"order": []string{"id"},
-		"limit": 500,
+		"limit": AccessLogsBatchLimit,
 	}
 	endpoint := c.base + "/load_objects.fcgi?session=" + url.QueryEscape(c.Session())
 	data, status, err := c.postJSON(ctx, endpoint, body)
@@ -311,21 +316,38 @@ func (c *Client) ResolveRegistrations(ctx context.Context, userIds []string) {
 	endpoint := c.base + "/load_objects.fcgi?session=" + url.QueryEscape(c.Session())
 	data, status, err := c.postJSON(ctx, endpoint, body)
 	if err != nil {
-		c.log.Infof("aviso: falha ao traduzir user_id->registration (segue sem): %v", err)
+		// Erro de REDE: o aparelho pode até ter o user. NÃO cacheamos "" (isso
+		// deixaria o user permanentemente sem matrícula até reiniciar); apenas
+		// logamos e retentamos no próximo tick.
+		c.log.Infof("aviso: falha ao traduzir user_id->registration (segue sem, retenta depois): %v", err)
 		return
 	}
 	if status < 200 || status >= 300 {
-		c.log.Infof("aviso: load_objects users respondeu %d (segue sem)", status)
+		// Status não-2xx: NÃO cacheamos "" (não é uma negativa confirmada do
+		// aparelho, e sim uma falha de consulta). Se for sessão inválida
+		// (401/403), limpamos a sessão para forçar re-login no próximo tick.
+		if status == http.StatusUnauthorized || status == http.StatusForbidden {
+			c.log.Infof("aviso: load_objects users respondeu %d (sessao invalida); limpando sessao para re-login", status)
+			c.ClearSession()
+		} else {
+			c.log.Infof("aviso: load_objects users respondeu %d (segue sem, retenta depois)", status)
+		}
 		return
 	}
 	var out struct {
 		Users []deviceUser `json:"users"`
 	}
 	if err := json.Unmarshal(data, &out); err != nil {
-		c.log.Infof("aviso: resposta invalida de users (segue sem): %v", err)
+		// Resposta ilegível: NÃO cacheamos "" (não confirma ausência do user);
+		// retenta no próximo tick.
+		c.log.Infof("aviso: resposta invalida de users (segue sem, retenta depois): %v", err)
 		return
 	}
 
+	// Chegou aqui = o aparelho respondeu 2xx com um corpo válido: agora sim
+	// temos a lista CONFIRMADA de users. Só neste caminho é seguro marcar ""
+	// para os ids que não voltaram (o aparelho confirmadamente não tem esse
+	// user), evitando reconsultar todo tick.
 	c.mu.Lock()
 	for _, u := range out.Users {
 		uid := strings.TrimSpace(string(u.Id))
@@ -334,7 +356,8 @@ func (c *Client) ResolveRegistrations(ctx context.Context, userIds []string) {
 		}
 		c.regCache[uid] = strings.TrimSpace(string(u.Registration))
 	}
-	// Ids que não voltaram: marca "consultado, sem matrícula".
+	// Ids que não voltaram: marca "consultado, sem matrícula" (negativa
+	// confirmada pelo aparelho).
 	for _, id := range faltando {
 		if _, ok := c.regCache[id]; !ok {
 			c.regCache[id] = ""

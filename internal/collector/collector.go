@@ -92,25 +92,71 @@ func (c *Collector) SetUpdater(hook UpdateHook, every time.Duration, onUpdated O
 	c.onUpdated = onUpdated
 }
 
-// tick executa um ciclo: garante sessão, busca novas batidas, traduz
-// matrículas e encaminha cada uma ao Thera, avançando o cursor após cada 200.
+// tick executa um ciclo de coleta DRENANDO TODO O BACKLOG: garante a sessão e
+// então processa lotes repetidamente enquanto houver batidas represadas.
 //
-// Se forwardToThera falhar em qualquer batida, o erro é propagado
-// IMEDIATAMENTE (aborta o restante do laço): o cursor não avança nas batidas
-// seguintes, que serão reprocessadas no próximo tick. Este é o coração da
-// não-perda quando o Thera está fora.
+// Por que em loop: LoadNewAccessLogs devolve no máximo AccessLogsBatchLimit
+// batidas por chamada. Se o Thera ficou fora por horas, pode haver muito mais
+// que um lote represado no aparelho — e o buffer do iDFace rotaciona (~10.000).
+// Puxar só um lote por tick arriscaria perder batidas antigas antes de drená-las.
+//
+// O loop repete enquanto (a) o último lote veio CHEIO (== limit, sinal de que
+// ainda há mais) E (b) houve PROGRESSO (o cursor avançou nesse lote). Para em:
+//   - erro de forward/persistência -> propaga (Thera fora); reprocessa no
+//     próximo tick, cursor no último confirmado (não-perda);
+//   - lote < limit -> backlog drenado, nada mais a fazer agora;
+//   - sem progresso -> guard anti-loop-infinito (lote cheio só de ids inválidos
+//     ou cursor que não mexeu), evita girar para sempre.
+//
+// O cursor JAMAIS avança sem um 200 do Thera — a garantia de não-perda é a
+// mesma de antes, apenas repetida por lote. O ctx é respeitado entre iterações
+// para parada limpa do serviço.
 func (c *Collector) tick(ctx context.Context) error {
 	if err := c.device.EnsureSession(ctx); err != nil {
 		return err
 	}
 
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		cursorAntes := c.cursor.Get()
+		lote, err := c.drainOnce(ctx)
+		if err != nil {
+			// Erro de forward/persistência/leitura: propaga. Cursor está no
+			// último confirmado; o próximo tick retenta a partir daí.
+			return err
+		}
+		cursorDepois := c.cursor.Get()
+		progrediu := cursorDepois > cursorAntes
+
+		// Só continua drenando se o lote veio cheio (há mais represado) E
+		// houve progresso (guard anti-loop-infinito).
+		if lote < idface.AccessLogsBatchLimit || !progrediu {
+			return nil
+		}
+	}
+}
+
+// drainOnce processa UM lote: busca as próximas batidas (id > cursor), traduz
+// user_id -> matrícula e encaminha cada uma ao Thera, avançando o cursor após
+// cada 200. Devolve o tamanho do lote lido (para o tick decidir se drena mais)
+// e o erro que aborta a drenagem.
+//
+// Se PostDao/cursor.Set falharem, o erro é propagado IMEDIATAMENTE (aborta o
+// restante do laço): o cursor não avança nas batidas seguintes, reprocessadas
+// no próximo tick. Este é o coração da não-perda quando o Thera está fora.
+func (c *Collector) drainOnce(ctx context.Context) (int, error) {
 	cursor := c.cursor.Get()
 	logs, err := c.device.LoadNewAccessLogs(ctx, cursor)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if len(logs) == 0 {
-		return nil
+		return 0, nil
 	}
 
 	// Ordena ascendente por id numérico (o device já manda order:["id"], mas
@@ -126,7 +172,7 @@ func (c *Collector) tick(ctx context.Context) error {
 		return a < b
 	})
 
-	// Traduz em lote os user_id -> registration (uma consulta cobre o tick).
+	// Traduz em lote os user_id -> registration (uma consulta cobre o lote).
 	userIds := make([]string, 0, len(logs))
 	for _, l := range logs {
 		userIds = append(userIds, string(l.UserId))
@@ -136,7 +182,7 @@ func (c *Collector) tick(ctx context.Context) error {
 	for _, l := range logs {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return len(logs), ctx.Err()
 		default:
 		}
 
@@ -151,15 +197,15 @@ func (c *Collector) tick(ctx context.Context) error {
 
 		payload := c.buildPayload(l)
 		if err := c.thera.PostDao(ctx, payload); err != nil {
-			// Thera fora / não-2xx: aborta o tick ANTES do setCursor. Cursor
-			// fica no último confirmado; reprocessa no próximo tick.
-			return err
+			// Thera fora / não-2xx: aborta ANTES do setCursor. Cursor fica no
+			// último confirmado; reprocessa no próximo tick.
+			return len(logs), err
 		}
 
 		if err := c.cursor.Set(id); err != nil {
 			// Falha ao persistir cursor: aborta para não avançar em memória sem
 			// persistir. Reprocessa (Thera deduplica) — não perde nada.
-			return err
+			return len(logs), err
 		}
 
 		reg := c.device.Registration(string(l.UserId))
@@ -169,7 +215,7 @@ func (c *Collector) tick(ctx context.Context) error {
 		c.log.Infof("batida encaminhada: id=%s user=%s matricula=%s time=%s",
 			l.Id, l.UserId, reg, l.Time)
 	}
-	return nil
+	return len(logs), nil
 }
 
 // buildPayload monta o DaoPayload de uma batida (regras de fallback do Node).

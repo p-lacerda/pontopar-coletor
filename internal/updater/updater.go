@@ -22,10 +22,21 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 
 	"github.com/creativeprojects/go-selfupdate"
 	"github.com/pontopar/pontopar-coletor/internal/config"
 )
+
+// semverRe valida uma versão semver (com "v" opcional). Aceita as formas
+// MAJOR.MINOR.PATCH com pré-release/build metadata opcionais (subconjunto
+// pragmático da spec semver.org, suficiente para tags de release do GitHub).
+// Builds SEM ldflags trazem currentVersion="dev" (ou vazio), que NÃO casa aqui
+// e, portanto, DESLIGA o auto-update em vez de estourar no primeiro check.
+var semverRe = regexp.MustCompile(`^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
+
+// isValidSemver diz se s é uma versão semver comparável pelo go-selfupdate.
+func isValidSemver(s string) bool { return semverRe.MatchString(s) }
 
 // Logger é a interface mínima de log.
 type Logger interface {
@@ -44,11 +55,22 @@ type Updater struct {
 	log     Logger
 }
 
-// New cria um Updater a partir da config de update. Devolve (nil, nil) se o
-// auto-update estiver desligado (repo vazio) — nesse caso o chamador
-// simplesmente não agenda checagens.
+// New cria um Updater a partir da config de update. Devolve (nil, nil) —
+// auto-update DESLIGADO, no-op — quando:
+//   - o repo está vazio (auto-update não configurado), ou
+//   - currentVersion NÃO é semver válido (ex.: "dev" num build sem ldflags):
+//     nesse caso o go-selfupdate não consegue comparar a versão e estouraria no
+//     primeiro check. Como o auto-update é best-effort, ele JAMAIS pode derrubar
+//     a coleta — então apenas logamos e desligamos.
+//
+// O chamador (collector) trata *Updater nil como "não agenda checagens", então
+// devolver nil aqui é o desligamento seguro.
 func New(cfg *config.Config, currentVersion string, log Logger) (*Updater, error) {
 	if cfg.Update.Repo == "" {
+		return nil, nil
+	}
+	if !isValidSemver(currentVersion) {
+		log.Errorf("auto-update desligado: versao atual %q nao e semver valido (build sem ldflags?); a coleta segue normal", currentVersion)
 		return nil, nil
 	}
 	return &Updater{
