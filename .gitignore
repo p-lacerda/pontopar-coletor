@@ -1,0 +1,21 @@
+# Configuração real do cliente (contém segredos: deviceSecret, token, senha)
+config.json
+
+# Binários compilados
+*.exe
+*.exe.old
+
+# Estado de runtime (criado sozinho ao lado do exe)
+cursor.json
+cursor.json.tmp-*
+
+# Logs
+*.log
+*.log.1
+
+# Diretório de artefatos de build/release
+dist/
+
+# Diversos do SO/editor
+.DS_Store
+Thumbs.db

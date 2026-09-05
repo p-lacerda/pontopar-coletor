@@ -1,0 +1,164 @@
+// Package config carrega e valida o config.json do coletor PontoPar.
+//
+// O arquivo de configuração fica SEMPRE ao lado do executável (não no
+// diretório de trabalho), porque como serviço do Windows o cwd é
+// C:\Windows\System32. Por isso resolvemos o diretório via os.Executable().
+package config
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+// UpdateConfig controla o auto-update via GitHub Releases.
+type UpdateConfig struct {
+	// Repo no formato "owner/name" (ex.: "pontopar/pontopar-coletor").
+	// Vazio desliga o auto-update.
+	Repo string `json:"repo"`
+	// CheckHours é o intervalo entre checagens de nova versão. Default 6h.
+	CheckHours int `json:"checkHours"`
+	// Token de acesso ao GitHub. Necessário apenas para repositório PRIVADO.
+	// IMPORTANTE: o serviço roda como LocalSystem e NÃO herda o env do usuário,
+	// então o token DEVE vir daqui (config), não da variável GITHUB_TOKEN.
+	Token string `json:"token"`
+}
+
+// flexInt64 aceita, no JSON, tanto número quanto string (o config.json de
+// referência tinha "deviceId": "" — string vazia). Guarda sempre como int64.
+type flexInt64 int64
+
+// UnmarshalJSON implementa json.Unmarshaler para flexInt64.
+func (f *flexInt64) UnmarshalJSON(b []byte) error {
+	s := strings.TrimSpace(string(b))
+	if s == "null" || s == `""` || s == "" {
+		*f = 0
+		return nil
+	}
+	// Remove aspas se vier como string.
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		s = s[1 : len(s)-1]
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		*f = 0
+		return nil
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return fmt.Errorf("deviceId invalido %q: %w", s, err)
+	}
+	*f = flexInt64(n)
+	return nil
+}
+
+// Config espelha o config.json.
+type Config struct {
+	DeviceIp     string    `json:"deviceIp"`
+	DevicePort   int       `json:"devicePort"`   // default 80
+	Login        string    `json:"login"`
+	Password     string    `json:"password"`
+	DeviceId     flexInt64 `json:"deviceId"`     // fallback quando o access_log não traz device_id
+	DeviceSecret string    `json:"deviceSecret"` // vai na URL do /dao do Thera
+	TheraBase    string    `json:"theraBase"`
+	PollSeconds  int       `json:"pollSeconds"`  // default 15
+	Update       UpdateConfig `json:"update"`
+}
+
+// Port devolve a porta do device (default 80).
+func (c *Config) Port() int {
+	if c.DevicePort == 0 {
+		return 80
+	}
+	return c.DevicePort
+}
+
+// DeviceBase devolve a URL base HTTP do iDFace (linha Acesso, porta 80, sem TLS).
+func (c *Config) DeviceBase() string {
+	return fmt.Sprintf("http://%s:%d", c.DeviceIp, c.Port())
+}
+
+// DeviceIdInt devolve o deviceId de fallback como int64.
+func (c *Config) DeviceIdInt() int64 { return int64(c.DeviceId) }
+
+// TheraDaoURL monta a URL do webhook /dao do Thera.
+// Espelha o Node: cfg.theraBase.replace(/\/$/,"") -> remove UMA barra final.
+func (c *Config) TheraDaoURL() string {
+	base := strings.TrimSuffix(c.TheraBase, "/")
+	return base + "/api/controlid/notifications/" + c.DeviceSecret + "/dao"
+}
+
+// Poll devolve o intervalo de polling (default 15s).
+func (c *Config) Poll() int {
+	if c.PollSeconds == 0 {
+		return 15
+	}
+	return c.PollSeconds
+}
+
+// UpdateCheckHours devolve o intervalo de checagem de update (default 6h).
+func (c *Config) UpdateCheckHours() int {
+	if c.Update.CheckHours == 0 {
+		return 6
+	}
+	return c.Update.CheckHours
+}
+
+// ExeDir devolve o diretório onde o executável está, resolvendo symlinks.
+// É o diretório onde ficam config.json, cursor.json e o log.
+func ExeDir() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	// Resolve eventual symlink para achar o diretório real.
+	if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {
+		exe = resolved
+	}
+	return filepath.Dir(exe), nil
+}
+
+// Path devolve o caminho padrão do config.json (ao lado do exe).
+func Path(dir string) string { return filepath.Join(dir, "config.json") }
+
+// Load lê e valida o config.json em <dir>/config.json.
+func Load(dir string) (*Config, error) {
+	p := Path(dir)
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return nil, fmt.Errorf("nao foi possivel ler %s: %w", p, err)
+	}
+	var c Config
+	if err := json.Unmarshal(data, &c); err != nil {
+		return nil, fmt.Errorf("config.json invalido (%s): %w", p, err)
+	}
+	if err := c.Validate(); err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// Validate confere os campos obrigatórios.
+func (c *Config) Validate() error {
+	var missing []string
+	if strings.TrimSpace(c.DeviceIp) == "" {
+		missing = append(missing, "deviceIp")
+	}
+	if strings.TrimSpace(c.Login) == "" {
+		missing = append(missing, "login")
+	}
+	// password pode ser vazio em alguns aparelhos, então não exigimos.
+	if strings.TrimSpace(c.TheraBase) == "" {
+		missing = append(missing, "theraBase")
+	}
+	if strings.TrimSpace(c.DeviceSecret) == "" {
+		missing = append(missing, "deviceSecret")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("config.json incompleto, faltam campos: %s", strings.Join(missing, ", "))
+	}
+	return nil
+}

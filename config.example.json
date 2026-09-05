@@ -1,0 +1,37 @@
+{
+  "_comentario": "Copie este arquivo para config.json (AO LADO do pontopar-coletor.exe) e preencha os campos abaixo. Comentarios (_campo) sao ignorados.",
+
+  "_deviceIp": "IP do aparelho iDFace na LAN (o mesmo que responde ao ping).",
+  "deviceIp": "192.168.0.6",
+
+  "_devicePort": "Porta HTTP do aparelho. Linha de Acesso usa 80. Opcional (default 80).",
+  "devicePort": 80,
+
+  "_login": "Usuario de admin do aparelho (padrao de fabrica: admin).",
+  "login": "admin",
+
+  "_password": "Senha do aparelho (padrao de fabrica: admin).",
+  "password": "admin",
+
+  "_deviceId": "ID do device NO THERA, usado como fallback quando o access_log nao traz device_id. Pode ser numero ou string; deixe \"\" se nao souber.",
+  "deviceId": "",
+
+  "_theraBase": "URL base da API do Thera (ja vem preenchida em producao).",
+  "theraBase": "https://xi6vuuvift.us-east-1.awsapprunner.com",
+
+  "_deviceSecret": "Segredo que o Thera gera ao cadastrar este aparelho. Vai na URL do webhook /dao.",
+  "deviceSecret": "COLE_AQUI_O_DEVICE_SECRET_DO_THERA",
+
+  "_pollSeconds": "Intervalo (segundos) entre verificacoes de novas batidas. Opcional (default 15).",
+  "pollSeconds": 15,
+
+  "_update": "Auto-update via GitHub Releases. Deixe repo vazio para DESLIGAR o auto-update.",
+  "update": {
+    "_repo": "owner/name do repositorio das releases (ex.: pontopar/pontopar-coletor). Vazio desliga o auto-update.",
+    "repo": "pontopar/pontopar-coletor",
+    "_checkHours": "Intervalo (horas) entre checagens de nova versao. Opcional (default 6).",
+    "checkHours": 6,
+    "_token": "Token do GitHub. SO necessario se o repositorio for PRIVADO. O servico roda como LocalSystem e NAO le a variavel de ambiente GITHUB_TOKEN, entao o token DEVE vir aqui.",
+    "token": ""
+  }
+}
