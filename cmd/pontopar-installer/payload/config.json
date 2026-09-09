@@ -1,5 +1,5 @@
 {
-  "deviceIp": "",
+  "deviceIp": "192.168.0.140",
   "devicePort": 80,
   "login": "admin",
   "password": "admin",

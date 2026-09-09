@@ -86,7 +86,8 @@ Baixe e dê dois cliques em `PontoPar-Setup_vX.Y.Z_windows_amd64.exe` na seção
 **Releases**. Ele é um instalador separado — não é o programa coletor.
 
 1. O Windows pede autorização de administrador uma única vez.
-2. Preencha ou confira os dados do Control iD e do Thera.
+2. O IP da Show de Bola (`192.168.0.140`) já vem preenchido; confira os dados
+   e cole o **Segredo do Thera** no campo obrigatório.
 3. Clique em **Instalar e iniciar**.
 
 O setup copia o coletor para `C:\ProgramData\PontoParColetor\`, registra o

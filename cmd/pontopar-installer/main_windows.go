@@ -99,7 +99,7 @@ func runInstaller() error {
 	if err != nil {
 		return err
 	}
-	intro.SetText("Este instalador coloca o coletor em uma pasta fixa do Windows, cria o serviço que inicia automaticamente e registra a opção de desinstalação em Aplicativos instalados.")
+	intro.SetText("O IP do Control iD da Show de Bola já vem preenchido. Confira os dados e cole o Segredo do Thera no campo abaixo: ele será salvo somente nesta PC durante a instalação.")
 
 	form, err := walk.NewComposite(mw)
 	if err != nil {
@@ -132,7 +132,7 @@ func runInstaller() error {
 	if err != nil {
 		return err
 	}
-	secret, err := addLine(form, "Segredo do Thera", cfg.DeviceSecret, true, false)
+	secret, err := addLine(form, "Segredo do Thera (obrigatório)", cfg.DeviceSecret, true, false)
 	if err != nil {
 		return err
 	}
