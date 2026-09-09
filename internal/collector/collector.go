@@ -10,6 +10,7 @@ package collector
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -65,6 +66,8 @@ type Collector struct {
 	updater     UpdateHook
 	updateEvery time.Duration
 	onUpdated   OnUpdatedFunc
+	lastSync    time.Time
+	syncEvery   time.Duration
 }
 
 // New monta um coletor a partir da config e do diretório-base (onde ficam
@@ -74,12 +77,13 @@ func New(cfg *config.Config, dir string, log Logger) *Collector {
 	theraHTTP := &http.Client{Timeout: theraHTTPTimeout}
 
 	return &Collector{
-		cfg:    cfg,
-		dir:    dir,
-		log:    log,
-		device: idface.New(cfg.DeviceBase(), cfg.Login, cfg.Password, deviceHTTP, log),
-		thera:  thera.New(cfg.TheraDaoURL(), theraHTTP),
-		cursor: store.NewCursor(dir),
+		cfg:       cfg,
+		dir:       dir,
+		log:       log,
+		device:    idface.New(cfg.DeviceBase(), cfg.Login, cfg.Password, deviceHTTP, log),
+		thera:     thera.New(cfg.TheraDaoURL(), theraHTTP),
+		cursor:    store.NewCursor(dir),
+		syncEvery: 5 * time.Minute,
 	}
 }
 
@@ -115,6 +119,15 @@ func (c *Collector) tick(ctx context.Context) error {
 	if err := c.device.EnsureSession(ctx); err != nil {
 		return err
 	}
+	// A sincronização é best-effort: indisponibilidade temporária do endpoint
+	// não pode interromper a importação fiscal das batidas.
+	if c.lastSync.IsZero() || time.Since(c.lastSync) >= c.syncEvery {
+		if err := c.syncUsers(ctx); err != nil {
+			c.log.Errorf("sincronização de usuários/faces falhou (batidas continuam): %v", err)
+		} else {
+			c.lastSync = time.Now()
+		}
+	}
 
 	for {
 		select {
@@ -139,6 +152,40 @@ func (c *Collector) tick(ctx context.Context) error {
 			return nil
 		}
 	}
+}
+
+func (c *Collector) syncUsers(ctx context.Context) error {
+	manifest, err := c.thera.GetSync(ctx)
+	if err != nil {
+		return err
+	}
+	if manifest.DeviceID != "" && c.cfg.DeviceIdInt() != 0 && manifest.DeviceID != itoa(c.cfg.DeviceIdInt()) {
+		return fmt.Errorf("manifesto é do device %s, configurado %s", manifest.DeviceID, itoa(c.cfg.DeviceIdInt()))
+	}
+	users := make([]idface.User, 0, len(manifest.Users))
+	for _, wanted := range manifest.Users {
+		image, err := c.thera.GetBinary(ctx, wanted.FaceURL)
+		if err != nil {
+			return fmt.Errorf("face matrícula %s: %w", wanted.Registration, err)
+		}
+		users = append(users, idface.User{Registration: wanted.Registration, Name: wanted.Name, Enabled: wanted.Enabled, Image: image})
+	}
+	if err := c.device.UpsertUsers(ctx, users, time.Now().Unix()); err != nil {
+		return err
+	}
+	observed, err := c.device.ListUsers(ctx)
+	if err != nil {
+		return err
+	}
+	result := make([]thera.SyncObservation, 0, len(observed))
+	for _, user := range observed {
+		result = append(result, thera.SyncObservation{UserID: itoa(user.Id), Registration: user.Registration, FaceEnrolled: user.ImageRegistered})
+	}
+	if err := c.thera.PostSyncResult(ctx, result); err != nil {
+		return err
+	}
+	c.log.Infof("sincronização concluída: %d usuários observados", len(result))
+	return nil
 }
 
 // drainOnce processa UM lote: busca as próximas batidas (id > cursor), traduz

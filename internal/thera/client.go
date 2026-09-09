@@ -45,14 +45,102 @@ type DaoPayload struct {
 
 // Client encaminha payloads ao Thera.
 type Client struct {
-	daoURL string
-	http   *http.Client
+	daoURL  string
+	syncURL string
+	http    *http.Client
 }
 
 // New cria um cliente Thera. daoURL é a URL completa do endpoint /dao.
 // httpClient deve ter timeout (internet).
 func New(daoURL string, httpClient *http.Client) *Client {
-	return &Client{daoURL: daoURL, http: httpClient}
+	return &Client{daoURL: daoURL, syncURL: strings.TrimSuffix(daoURL, "/dao") + "/sync", http: httpClient}
+}
+
+// SyncUser é o cadastro desejado pelo Thera. FaceURL é temporária e só é
+// baixada em memória pelo coletor; nunca é persistida no PC.
+type SyncUser struct {
+	EmployeeID   string `json:"employeeId"`
+	Name         string `json:"name"`
+	Registration string `json:"registration"`
+	Enabled      bool   `json:"enabled"`
+	FaceURL      string `json:"faceUrl"`
+}
+
+type SyncManifest struct {
+	DeviceID string     `json:"deviceId"`
+	Users    []SyncUser `json:"users"`
+}
+type SyncObservation struct {
+	UserID       string `json:"userId"`
+	Registration string `json:"registration"`
+	FaceEnrolled bool   `json:"faceEnrolled"`
+}
+
+// GetSync busca o manifesto autenticado pelo segredo embutido na URL do dao.
+func (c *Client) GetSync(ctx context.Context) (SyncManifest, error) {
+	var out SyncManifest
+	data, status, err := c.request(ctx, http.MethodGet, c.syncURL, nil, "")
+	if err != nil {
+		return out, err
+	}
+	if status < 200 || status >= 300 {
+		return out, fmt.Errorf("Thera /sync respondeu %d: %s", status, strings.TrimSpace(string(data)))
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return out, fmt.Errorf("manifesto /sync inválido: %w", err)
+	}
+	return out, nil
+}
+
+func (c *Client) PostSyncResult(ctx context.Context, users []SyncObservation) error {
+	body, err := json.Marshal(map[string]any{"users": users})
+	if err != nil {
+		return err
+	}
+	data, status, err := c.request(ctx, http.MethodPost, c.syncURL+"/result", bytes.NewReader(body), "application/json")
+	if err != nil {
+		return err
+	}
+	if status < 200 || status >= 300 {
+		return fmt.Errorf("Thera /sync/result respondeu %d: %s", status, strings.TrimSpace(string(data)))
+	}
+	return nil
+}
+
+// GetBinary baixa uma face temporária retornada pelo manifesto. O limite evita
+// armazenar acidentalmente arquivos grandes enviados por uma URL comprometida.
+func (c *Client) GetBinary(ctx context.Context, target string) ([]byte, error) {
+	if strings.TrimSpace(target) == "" {
+		return nil, nil
+	}
+	data, status, err := c.request(ctx, http.MethodGet, target, nil, "")
+	if err != nil {
+		return nil, err
+	}
+	if status < 200 || status >= 300 {
+		return nil, fmt.Errorf("baixar face respondeu %d", status)
+	}
+	if len(data) > 2<<20 {
+		return nil, fmt.Errorf("face excede 2 MB")
+	}
+	return data, nil
+}
+
+func (c *Client) request(ctx context.Context, method, target string, body io.Reader, contentType string) ([]byte, int, error) {
+	req, err := http.NewRequestWithContext(ctx, method, target, body)
+	if err != nil {
+		return nil, 0, err
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20+1))
+	return data, resp.StatusCode, err
 }
 
 // PostDao envia o payload ao Thera. Erro se a resposta não for 2xx.
