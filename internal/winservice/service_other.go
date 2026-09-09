@@ -39,6 +39,9 @@ func Uninstall() error { return errNotWindows }
 // Start não é suportado fora do Windows.
 func Start() error { return errNotWindows }
 
+// InstallAndStart não é suportado fora do Windows.
+func InstallAndStart(exePath string) error { return errNotWindows }
+
 // Stop não é suportado fora do Windows.
 func Stop() error { return errNotWindows }
 

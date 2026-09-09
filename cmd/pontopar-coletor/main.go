@@ -13,7 +13,7 @@
 //	version    imprime a versão embutida.
 //
 // Sem argumentos, se estiver sob o SCM, roda como serviço; caso contrário,
-// imprime o uso.
+// abre a interface gráfica de operação.
 //
 // A versão é injetada em build via: -ldflags "-X main.version=v1.2.3".
 package main
@@ -28,6 +28,7 @@ import (
 	"github.com/p-lacerda/pontopar-coletor/internal/applog"
 	"github.com/p-lacerda/pontopar-coletor/internal/collector"
 	"github.com/p-lacerda/pontopar-coletor/internal/config"
+	"github.com/p-lacerda/pontopar-coletor/internal/gui"
 	"github.com/p-lacerda/pontopar-coletor/internal/updater"
 	"github.com/p-lacerda/pontopar-coletor/internal/winservice"
 )
@@ -52,8 +53,10 @@ func main() {
 	// Modo interativo: despacha subcomando.
 	args := os.Args[1:]
 	if len(args) == 0 {
-		usage()
-		os.Exit(2)
+		if err := gui.Run(version); err != nil {
+			fatalf("interface grafica: %v", err)
+		}
+		return
 	}
 
 	cmd := strings.ToLower(args[0])
@@ -65,6 +68,11 @@ func main() {
 		}
 		fmt.Printf("servico %q instalado (auto-start + recovery). Configure o config.json ao lado do exe e rode: %s start\n",
 			winservice.ServiceName, exeBase())
+	case "install-start":
+		if err := winservice.InstallAndStart(mustExePath()); err != nil {
+			fatalf("ativar inicio com Windows: %v", err)
+		}
+		fmt.Println("inicio automatico ativado; servico iniciado")
 	case "uninstall", "remove":
 		if err := winservice.Uninstall(); err != nil {
 			fatalf("uninstall: %v", err)
@@ -90,6 +98,10 @@ func main() {
 		// Foreground: útil para dev. debug=true no winservice usa debug.Run no
 		// Windows; no Linux apenas executa a função de trabalho.
 		runService(true)
+	case "gui", "interface":
+		if err := gui.Run(version); err != nil {
+			fatalf("interface grafica: %v", err)
+		}
 	case "version", "--version", "-v":
 		fmt.Println(version)
 	case "help", "--help", "-h":
@@ -169,11 +181,13 @@ Uso:
 
 Subcomandos:
   install     registra o servico no Windows (auto-start + recovery). Requer Administrador.
+  install-start instala (se preciso), inicia agora e deixa no auto-start. Requer Administrador.
   uninstall   remove o servico. Requer Administrador.
   start       inicia o servico.
   stop        para o servico.
   status      mostra o estado do servico.
   run         roda em foreground (debug/teste), logando tambem no console.
+  gui         abre a interface grafica (tambem e o padrao sem argumentos).
   version     imprime a versao.
 
 A configuracao fica em config.json AO LADO do executavel.

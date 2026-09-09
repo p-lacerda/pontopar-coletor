@@ -3,8 +3,9 @@
 Programa Windows (em Go) que roda numa PC leve **na mesma rede (LAN/WiFi)** do
 aparelho **Control iD iDFace** (linha de Acesso, HTTP porta 80). Faz *polling*
 das batidas faciais do aparelho e encaminha cada batida NOVA para o **Thera** na
-nuvem. Instala-se como **Serviço do Windows** (auto-start no boot), tem
-**reprocessamento offline** (não perde batida se a PC ou o Thera ficarem
+nuvem. Instala-se como **Serviço do Windows** (auto-start no boot), traz uma
+**interface gráfica com ícone na bandeja** e tem **reprocessamento offline**
+(não perde batida se a PC ou o Thera ficarem
 offline) e **auto-update** via GitHub Releases.
 
 - Fala **HTTP** com o iDFace (porta 80, sem TLS) — só na LAN.
@@ -79,7 +80,22 @@ fica ao lado do executável).
 
 ---
 
-## 3. Instalar como serviço do Windows
+## 3. Tela do programa e início automático
+
+Dê dois cliques em `pontopar-coletor.exe`. A tela permite conferir ou alterar
+IP, porta e credenciais do Control iD, salvar a configuração e testar se a PC
+consegue alcançar o aparelho. O endereço do Thera, o segredo e o repositório
+de atualizações já vêm no `config.json` e não são expostos na tela.
+
+- Ao fechar a janela, ele **não para a coleta**: apenas fica minimizado no
+  ícone do PontoPar perto do relógio do Windows.
+- Clique no ícone da bandeja para abrir a tela novamente. O menu também tem
+  `Fechar janela`, que fecha só a tela; o serviço instalado continua rodando.
+- Clique em **Ativar início com o Windows**. O Windows mostrará a confirmação
+  de administrador (UAC); depois de aceitar, o serviço é instalado, iniciado e
+  configurado para iniciar automaticamente a cada boot.
+
+## 4. Instalar como serviço do Windows (alternativa por linha de comando)
 
 Baixe o `pontopar-coletor.exe` mais recente (das Releases) e coloque numa pasta
 fixa, ex.: `C:\PontoPar\`. Ao lado dele, crie o `config.json`.
@@ -117,7 +133,7 @@ id=...`.
 
 ---
 
-## 4. Auto-update (GitHub Releases)
+## 5. Auto-update (GitHub Releases)
 
 O coletor checa a release `latest` do repositório em `update.repo` a cada
 `update.checkHours`. Se houver uma versão **maior** (semver) que a embutida:
@@ -158,14 +174,14 @@ uma tag `v*`.
 
 ---
 
-## 5. Build (desenvolvimento)
+## 6. Build (desenvolvimento)
 
 Go 1.24+ (o alvo é `windows/amd64`; compila no Linux — é Go puro +
 `golang.org/x/sys/windows`).
 
 ```sh
 # compilar o .exe com a versão embutida
-GOOS=windows GOARCH=amd64 go build -ldflags "-X main.version=v1.2.3" \
+GOOS=windows GOARCH=amd64 go build -ldflags "-H windowsgui -X main.version=v1.2.3" \
   -o pontopar-coletor.exe ./cmd/pontopar-coletor
 
 # verificação
@@ -181,10 +197,11 @@ git push origin v1.2.3    # dispara .github/workflows/release.yml
 
 ---
 
-## 6. Estrutura do projeto
+## 7. Estrutura do projeto
 
 ```
-cmd/pontopar-coletor/main.go   CLI: install|uninstall|start|stop|status|run|version
+cmd/pontopar-coletor/main.go   interface gráfica e CLI de serviço
+internal/gui                   janela de configuração + ícone na bandeja
 internal/config                carrega/valida config.json (ao lado do exe)
 internal/idface                cliente do iDFace (login, sessão, access_logs, de-para user→matrícula)
 internal/thera                 cliente do webhook /dao do Thera
@@ -198,7 +215,7 @@ internal/applog                log em arquivo (rotativo) + console no modo run
 
 ---
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 - **`install` diz "conectar ao SCM (rode como Administrador)":** abra o Prompt
   **como Administrador**. `install`/`uninstall`/`start`/`stop` exigem elevação.

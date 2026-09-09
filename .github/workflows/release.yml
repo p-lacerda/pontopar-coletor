@@ -39,7 +39,9 @@ jobs:
           # onde {cmd} == "pontopar-coletor" (nome do exe instalado no cliente).
           ASSET="pontopar-coletor_${VERSION}_windows_amd64.exe"
           mkdir -p dist
-          go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+          # -H windowsgui evita abrir uma janela de terminal quando o usuário
+          # dá dois cliques no programa; a interface e a bandeja são nativas.
+          go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=${VERSION}" \
             -o "dist/${ASSET}" ./cmd/pontopar-coletor
           echo "ASSET=${ASSET}" >> "$GITHUB_ENV"
 

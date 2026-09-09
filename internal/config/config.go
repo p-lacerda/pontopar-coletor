@@ -57,14 +57,14 @@ func (f *flexInt64) UnmarshalJSON(b []byte) error {
 
 // Config espelha o config.json.
 type Config struct {
-	DeviceIp     string    `json:"deviceIp"`
-	DevicePort   int       `json:"devicePort"`   // default 80
-	Login        string    `json:"login"`
-	Password     string    `json:"password"`
-	DeviceId     flexInt64 `json:"deviceId"`     // fallback quando o access_log não traz device_id
-	DeviceSecret string    `json:"deviceSecret"` // vai na URL do /dao do Thera
-	TheraBase    string    `json:"theraBase"`
-	PollSeconds  int       `json:"pollSeconds"`  // default 15
+	DeviceIp     string       `json:"deviceIp"`
+	DevicePort   int          `json:"devicePort"` // default 80
+	Login        string       `json:"login"`
+	Password     string       `json:"password"`
+	DeviceId     flexInt64    `json:"deviceId"`     // fallback quando o access_log não traz device_id
+	DeviceSecret string       `json:"deviceSecret"` // vai na URL do /dao do Thera
+	TheraBase    string       `json:"theraBase"`
+	PollSeconds  int          `json:"pollSeconds"` // default 15
 	Update       UpdateConfig `json:"update"`
 }
 
@@ -83,6 +83,10 @@ func (c *Config) DeviceBase() string {
 
 // DeviceIdInt devolve o deviceId de fallback como int64.
 func (c *Config) DeviceIdInt() int64 { return int64(c.DeviceId) }
+
+// SetDeviceId define o deviceId de fallback vindo da tela de configuração.
+// Zero significa que o coletor deve usar o device_id vindo no access_log.
+func (c *Config) SetDeviceId(value int64) { c.DeviceId = flexInt64(value) }
 
 // TheraDaoURL monta a URL do webhook /dao do Thera.
 // Espelha o Node: cfg.theraBase.replace(/\/$/,"") -> remove UMA barra final.
@@ -139,6 +143,56 @@ func Load(dir string) (*Config, error) {
 		return nil, err
 	}
 	return &c, nil
+}
+
+// Save grava a configuração em config.json com escrita atômica. Assim, uma queda
+// de energia no meio do clique em "Salvar" não deixa o coletor sem configuração
+// na próxima inicialização do Windows.
+func Save(dir string, c *Config) error {
+	if c == nil {
+		return fmt.Errorf("configuracao ausente")
+	}
+	if err := c.Validate(); err != nil {
+		return err
+	}
+
+	data, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return fmt.Errorf("serializar config.json: %w", err)
+	}
+	data = append(data, '\n')
+
+	tmp, err := os.CreateTemp(dir, "config.json.tmp-*")
+	if err != nil {
+		return fmt.Errorf("criar config temporario: %w", err)
+	}
+	tmpPath := tmp.Name()
+	ok := false
+	defer func() {
+		if !ok {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("proteger config temporario: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("gravar config temporario: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sincronizar config temporario: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("fechar config temporario: %w", err)
+	}
+	if err := os.Rename(tmpPath, Path(dir)); err != nil {
+		return fmt.Errorf("substituir config.json: %w", err)
+	}
+	ok = true
+	return nil
 }
 
 // Validate confere os campos obrigatórios.

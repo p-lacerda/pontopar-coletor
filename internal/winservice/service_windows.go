@@ -12,6 +12,7 @@ package winservice
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/windows/svc"
@@ -214,6 +215,59 @@ func Start() error {
 	defer s.Close()
 	if err := s.Start(); err != nil {
 		return fmt.Errorf("nao foi possivel iniciar o servico: %w", err)
+	}
+	return nil
+}
+
+// InstallAndStart deixa o coletor pronto para produção: instala caso ainda não
+// exista, preserva a configuração de auto-start/recovery e o inicia agora. É
+// chamado pelo processo elevado que a interface gráfica abre após o usuário
+// aceitar o UAC.
+func InstallAndStart(exePath string) error {
+	if err := Install(exePath); err != nil {
+		if !strings.Contains(err.Error(), "ja existe") {
+			return err
+		}
+		// Se o usuário substituiu o .exe em outra pasta, aproveita o clique
+		// elevado para garantir que o SCM aponte para esta cópia e continue em
+		// auto-start. Isso também transforma uma instalação antiga na atual.
+		if err := updateInstalledPath(exePath); err != nil {
+			return err
+		}
+	}
+	st, err := Status()
+	if err != nil {
+		return err
+	}
+	if st == "rodando" || st == "iniciando" {
+		return nil
+	}
+	return Start()
+}
+
+// updateInstalledPath atualiza uma instalação já existente sem recriar nem
+// apagar o serviço. Deve ser chamada somente pelo processo elevado.
+func updateInstalledPath(exePath string) error {
+	m, err := mgr.Connect()
+	if err != nil {
+		return fmt.Errorf("conectar ao SCM: %w", err)
+	}
+	defer m.Disconnect()
+	s, err := m.OpenService(ServiceName)
+	if err != nil {
+		return fmt.Errorf("abrir servico existente: %w", err)
+	}
+	defer s.Close()
+	cfg, err := s.Config()
+	if err != nil {
+		return fmt.Errorf("ler configuracao do servico: %w", err)
+	}
+	cfg.BinaryPathName = exePath
+	cfg.StartType = mgr.StartAutomatic
+	cfg.DisplayName = serviceDisplay
+	cfg.Description = serviceDesc
+	if err := s.UpdateConfig(cfg); err != nil {
+		return fmt.Errorf("atualizar configuracao do servico: %w", err)
 	}
 	return nil
 }
