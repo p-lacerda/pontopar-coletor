@@ -1,0 +1,15 @@
+{
+  "deviceIp": "",
+  "devicePort": 80,
+  "login": "admin",
+  "password": "admin",
+  "deviceId": "",
+  "theraBase": "https://xi6vuuvift.us-east-1.awsapprunner.com",
+  "deviceSecret": "",
+  "pollSeconds": 15,
+  "update": {
+    "repo": "p-lacerda/pontopar-coletor",
+    "checkHours": 6,
+    "token": ""
+  }
+}

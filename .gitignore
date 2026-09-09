@@ -5,6 +5,7 @@ config.json
 *.exe
 *.exe.old
 !cmd/pontopar-installer/payload/pontopar-coletor.exe
+!cmd/pontopar-installer/payload/config.json
 
 # Estado de runtime (criado sozinho ao lado do exe)
 cursor.json
