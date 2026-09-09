@@ -72,7 +72,7 @@ func main() {
 }
 
 func runInstaller() error {
-	cfg, err := loadDefaultConfig()
+	cfg, err := loadInitialConfig()
 	if err != nil {
 		return err
 	}
@@ -86,7 +86,7 @@ func runInstaller() error {
 	if err := mw.SetLayout(walk.NewVBoxLayout()); err != nil {
 		return err
 	}
-	if err := mw.SetSize(walk.Size{Width: 620, Height: 570}); err != nil {
+	if err := mw.SetSize(walk.Size{Width: 620, Height: 320}); err != nil {
 		return err
 	}
 
@@ -99,50 +99,7 @@ func runInstaller() error {
 	if err != nil {
 		return err
 	}
-	intro.SetText("O IP do Control iD da Show de Bola já vem preenchido. Confira os dados e cole o Segredo do Thera no campo abaixo: ele será salvo somente nesta PC durante a instalação.")
-
-	form, err := walk.NewComposite(mw)
-	if err != nil {
-		return err
-	}
-	if err := form.SetLayout(walk.NewGridLayout()); err != nil {
-		return err
-	}
-	ip, err := addLine(form, "IP do Control iD", cfg.DeviceIP, false, false)
-	if err != nil {
-		return err
-	}
-	port, err := addLine(form, "Porta web", strconv.Itoa(defaultInt(cfg.DevicePort, 80)), false, false)
-	if err != nil {
-		return err
-	}
-	login, err := addLine(form, "Usuário", cfg.Login, false, false)
-	if err != nil {
-		return err
-	}
-	password, err := addLine(form, "Senha", cfg.Password, true, false)
-	if err != nil {
-		return err
-	}
-	deviceID, err := addLine(form, "ID do aparelho no Thera", cfg.DeviceID, false, false)
-	if err != nil {
-		return err
-	}
-	theraBase, err := addLine(form, "Endereço do Thera", cfg.TheraBase, false, false)
-	if err != nil {
-		return err
-	}
-	secret, err := addLine(form, "Segredo do Thera (obrigatório)", cfg.DeviceSecret, true, false)
-	if err != nil {
-		return err
-	}
-	poll, err := addLine(form, "Verificar a cada (segundos)", strconv.Itoa(defaultInt(cfg.PollSeconds, 15)), false, false)
-	if err != nil {
-		return err
-	}
-	if _, err := addLine(form, "Atualizações", cfg.Update.Repo, false, true); err != nil {
-		return err
-	}
+	intro.SetText("Clique em Configurações para informar ou alterar IP, credenciais e o Segredo do Thera. A chave fica salva somente nesta PC.")
 
 	status, err := walk.NewLabel(mw)
 	if err != nil {
@@ -154,7 +111,11 @@ func runInstaller() error {
 			status.SetText("Serviço: não foi possível consultar — " + err.Error())
 			return
 		}
-		status.SetText("Serviço: " + st + " · destino: " + installDir())
+		configState := "configuração pendente"
+		if cfg.validate() == nil {
+			configState = "configuração salva"
+		}
+		status.SetText("Serviço: " + st + " · " + configState + " · destino: " + installDir())
 	}
 	refreshStatus()
 
@@ -165,6 +126,11 @@ func runInstaller() error {
 	if err := buttons.SetLayout(walk.NewHBoxLayout()); err != nil {
 		return err
 	}
+	settingsButton, err := walk.NewPushButton(buttons)
+	if err != nil {
+		return err
+	}
+	settingsButton.SetText("Configurações do Control iD e Thera")
 	installButton, err := walk.NewPushButton(buttons)
 	if err != nil {
 		return err
@@ -181,37 +147,27 @@ func runInstaller() error {
 	}
 	cancelButton.SetText("Cancelar")
 
-	readFields := func() (installerConfig, error) {
-		updated := cfg
-		updated.DeviceIP = strings.TrimSpace(ip.Text())
-		updated.Login = strings.TrimSpace(login.Text())
-		updated.Password = password.Text()
-		updated.DeviceID = strings.TrimSpace(deviceID.Text())
-		updated.TheraBase = strings.TrimSpace(theraBase.Text())
-		updated.DeviceSecret = strings.TrimSpace(secret.Text())
-		var err error
-		if updated.DevicePort, err = boundedInt(port.Text(), "porta web", 1, 65535); err != nil {
-			return installerConfig{}, err
+	settingsButton.Clicked().Attach(func() {
+		updated, saved, err := showSettings(mw, cfg)
+		if err != nil {
+			walk.MsgBox(mw, productName, "Não foi possível abrir configurações:\n"+err.Error(), walk.MsgBoxIconError)
+			return
 		}
-		if updated.PollSeconds, err = boundedInt(poll.Text(), "intervalo", 1, 86400); err != nil {
-			return installerConfig{}, err
+		if saved {
+			cfg = updated
+			refreshStatus()
 		}
-		if err := updated.validate(); err != nil {
-			return installerConfig{}, err
-		}
-		return updated, nil
-	}
+	})
 
 	installButton.Clicked().Attach(func() {
-		updated, err := readFields()
-		if err != nil {
-			walk.MsgBox(mw, productName, "Confira a configuração:\n"+err.Error(), walk.MsgBoxIconError)
+		if err := cfg.validate(); err != nil {
+			walk.MsgBox(mw, productName, "Abra Configurações e preencha os dados antes de instalar:\n"+err.Error(), walk.MsgBoxIconError)
 			return
 		}
 		if walk.MsgBox(mw, "Instalar PontoPar", "O coletor será instalado em:\n"+installDir()+"\n\nEle iniciará agora e automaticamente toda vez que o Windows ligar. Continuar?", walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) != walk.DlgCmdYes {
 			return
 		}
-		if err := install(updated); err != nil {
+		if err := install(cfg); err != nil {
 			walk.MsgBox(mw, productName, "A instalação falhou:\n"+err.Error(), walk.MsgBoxIconError)
 			return
 		}
@@ -235,6 +191,133 @@ func runInstaller() error {
 	mw.Show()
 	mw.Run()
 	return nil
+}
+
+// showSettings contém todos os inputs de conexão em uma tela própria. O botão
+// de salvar grava config.json em ProgramData imediatamente, mesmo antes de o
+// serviço ser instalado, para que a chave não se perca ao fechar o Setup.
+func showSettings(owner *walk.MainWindow, current installerConfig) (installerConfig, bool, error) {
+	dlg, err := walk.NewDialogWithFixedSize(owner)
+	if err != nil {
+		return current, false, err
+	}
+	dlg.SetTitle("Configurações do Control iD e Thera")
+	if err := dlg.SetLayout(walk.NewVBoxLayout()); err != nil {
+		return current, false, err
+	}
+	if err := dlg.SetSize(walk.Size{Width: 650, Height: 580}); err != nil {
+		return current, false, err
+	}
+	note, err := walk.NewLabel(dlg)
+	if err != nil {
+		return current, false, err
+	}
+	note.SetText("Preencha os dados e clique em Salvar configurações. O segredo será armazenado somente no config.json desta PC.")
+	form, err := walk.NewComposite(dlg)
+	if err != nil {
+		return current, false, err
+	}
+	// Não use GridLayout aqui. Na API imperativa do Walk cada controle de um
+	// Grid precisa receber SetRange manualmente; sem isso os controles existem,
+	// mas ficam sem célula e não são desenhados. HBox/VBox atribui o espaço
+	// automaticamente e mantém o formulário visível em qualquer escala de DPI.
+	if err := form.SetLayout(walk.NewVBoxLayout()); err != nil {
+		return current, false, err
+	}
+	ip, err := addSettingsLine(form, "IP do Control iD", current.DeviceIP, false, false)
+	if err != nil {
+		return current, false, err
+	}
+	port, err := addSettingsLine(form, "Porta web", strconv.Itoa(defaultInt(current.DevicePort, 80)), false, false)
+	if err != nil {
+		return current, false, err
+	}
+	login, err := addSettingsLine(form, "Usuário", current.Login, false, false)
+	if err != nil {
+		return current, false, err
+	}
+	password, err := addSettingsLine(form, "Senha", current.Password, true, false)
+	if err != nil {
+		return current, false, err
+	}
+	deviceID, err := addSettingsLine(form, "ID do aparelho no Thera (pode deixar 0)", current.DeviceID, false, false)
+	if err != nil {
+		return current, false, err
+	}
+	theraBase, err := addSettingsLine(form, "Endereço do Thera", current.TheraBase, false, false)
+	if err != nil {
+		return current, false, err
+	}
+	secret, err := addSettingsLine(form, "Segredo do Thera (obrigatório)", current.DeviceSecret, true, false)
+	if err != nil {
+		return current, false, err
+	}
+	poll, err := addSettingsLine(form, "Verificar a cada (segundos)", strconv.Itoa(defaultInt(current.PollSeconds, 15)), false, false)
+	if err != nil {
+		return current, false, err
+	}
+	if _, err := addSettingsLine(form, "Atualizações", current.Update.Repo, false, true); err != nil {
+		return current, false, err
+	}
+
+	buttons, err := walk.NewComposite(dlg)
+	if err != nil {
+		return current, false, err
+	}
+	if err := buttons.SetLayout(walk.NewHBoxLayout()); err != nil {
+		return current, false, err
+	}
+	saveButton, err := walk.NewPushButton(buttons)
+	if err != nil {
+		return current, false, err
+	}
+	saveButton.SetText("Salvar configurações")
+	cancelButton, err := walk.NewPushButton(buttons)
+	if err != nil {
+		return current, false, err
+	}
+	cancelButton.SetText("Cancelar")
+
+	result := current
+	saved := false
+	readFields := func() (installerConfig, error) {
+		updated := current
+		updated.DeviceIP = strings.TrimSpace(ip.Text())
+		updated.Login = strings.TrimSpace(login.Text())
+		updated.Password = password.Text()
+		updated.DeviceID = strings.TrimSpace(deviceID.Text())
+		updated.TheraBase = strings.TrimSpace(theraBase.Text())
+		updated.DeviceSecret = strings.TrimSpace(secret.Text())
+		var err error
+		if updated.DevicePort, err = boundedInt(port.Text(), "porta web", 1, 65535); err != nil {
+			return installerConfig{}, err
+		}
+		if updated.PollSeconds, err = boundedInt(poll.Text(), "intervalo", 1, 86400); err != nil {
+			return installerConfig{}, err
+		}
+		if err := updated.validate(); err != nil {
+			return installerConfig{}, err
+		}
+		return updated, nil
+	}
+	saveButton.Clicked().Attach(func() {
+		updated, err := readFields()
+		if err != nil {
+			walk.MsgBox(dlg, productName, "Confira a configuração:\n"+err.Error(), walk.MsgBoxIconError)
+			return
+		}
+		if err := saveDraft(updated); err != nil {
+			walk.MsgBox(dlg, productName, "Não foi possível salvar:\n"+err.Error(), walk.MsgBoxIconError)
+			return
+		}
+		result = updated
+		saved = true
+		walk.MsgBox(dlg, productName, "Configurações salvas nesta PC. Agora clique em Instalar e iniciar.", walk.MsgBoxIconInformation)
+		dlg.Close(walk.DlgCmdOK)
+	})
+	cancelButton.Clicked().Attach(func() { dlg.Close(walk.DlgCmdCancel) })
+	dlg.Run()
+	return result, saved, nil
 }
 
 func runUninstaller() {
@@ -344,6 +427,33 @@ func loadDefaultConfig() (installerConfig, error) {
 	if err := json.Unmarshal(defaultConfigJSON, &cfg); err != nil {
 		return installerConfig{}, fmt.Errorf("configuração embutida inválida: %w", err)
 	}
+	normalizeConfig(&cfg)
+	return cfg, nil
+}
+
+// loadInitialConfig prefere uma configuração previamente salva nesta PC. Isso
+// permite abrir o Setup de novo para trocar o segredo ou o IP sem redigitar.
+func loadInitialConfig() (installerConfig, error) {
+	defaults, err := loadDefaultConfig()
+	if err != nil {
+		return installerConfig{}, err
+	}
+	data, err := os.ReadFile(filepath.Join(installDir(), "config.json"))
+	if os.IsNotExist(err) {
+		return defaults, nil
+	}
+	if err != nil {
+		return installerConfig{}, fmt.Errorf("ler configuração salva: %w", err)
+	}
+	var saved installerConfig
+	if err := json.Unmarshal(data, &saved); err != nil {
+		return installerConfig{}, fmt.Errorf("configuração salva inválida: %w", err)
+	}
+	normalizeConfig(&saved)
+	return saved, nil
+}
+
+func normalizeConfig(cfg *installerConfig) {
 	if cfg.DevicePort == 0 {
 		cfg.DevicePort = 80
 	}
@@ -356,7 +466,25 @@ func loadDefaultConfig() (installerConfig, error) {
 	if cfg.Update.Repo == "" {
 		cfg.Update.Repo = "p-lacerda/pontopar-coletor"
 	}
-	return cfg, nil
+}
+
+// saveDraft armazena as escolhas feitas na tela de Configurações antes da
+// instalação. O serviço ainda não é criado aqui.
+func saveDraft(cfg installerConfig) error {
+	if err := cfg.validate(); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(installDir(), 0o750); err != nil {
+		return fmt.Errorf("criar pasta de configuração: %w", err)
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("montar configuração: %w", err)
+	}
+	if err := writeAtomic(filepath.Join(installDir(), "config.json"), append(data, '\n')); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c installerConfig) validate() error {
@@ -379,14 +507,27 @@ func (c installerConfig) validate() error {
 	return nil
 }
 
-func addLine(parent walk.Container, label, value string, password, readOnly bool) (*walk.LineEdit, error) {
-	text, err := walk.NewLabel(parent)
+func addSettingsLine(parent walk.Container, label, value string, password, readOnly bool) (*walk.LineEdit, error) {
+	row, err := walk.NewComposite(parent)
+	if err != nil {
+		return nil, err
+	}
+	if err := row.SetLayout(walk.NewHBoxLayout()); err != nil {
+		return nil, err
+	}
+	text, err := walk.NewLabel(row)
 	if err != nil {
 		return nil, err
 	}
 	text.SetText(label)
-	field, err := walk.NewLineEdit(parent)
+	if err := text.SetMinMaxSize(walk.Size{Width: 245, Height: 0}, walk.Size{Width: 245, Height: 0}); err != nil {
+		return nil, err
+	}
+	field, err := walk.NewLineEdit(row)
 	if err != nil {
+		return nil, err
+	}
+	if err := field.SetMinMaxSize(walk.Size{Width: 330, Height: 0}, walk.Size{}); err != nil {
 		return nil, err
 	}
 	if err := field.SetText(value); err != nil {
