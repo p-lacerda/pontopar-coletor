@@ -447,6 +447,16 @@ func (c *Client) listImageIDs(ctx context.Context) (map[int64]struct{}, error) {
 	}
 	var out struct {
 		UserIDs []int64 `json:"user_ids"`
+		// Firmware variants have returned the same information as an array
+		// of objects instead of user_ids. Accept both formats; otherwise a
+		// perfectly enrolled face is incorrectly reported as missing.
+		Images []struct {
+			UserID FlexStr `json:"user_id"`
+			ID     FlexStr `json:"id"`
+		} `json:"images"`
+		UserImages []struct {
+			UserID FlexStr `json:"user_id"`
+		} `json:"user_images"`
 	}
 	if err := json.Unmarshal(data, &out); err != nil {
 		return nil, fmt.Errorf("resposta inválida de faces: %w", err)
@@ -454,6 +464,18 @@ func (c *Client) listImageIDs(ctx context.Context) (map[int64]struct{}, error) {
 	result := make(map[int64]struct{}, len(out.UserIDs))
 	for _, id := range out.UserIDs {
 		result[id] = struct{}{}
+	}
+	for _, image := range out.Images {
+		id, err := strconv.ParseInt(strings.TrimSpace(string(image.UserID)), 10, 64)
+		if err == nil && id > 0 {
+			result[id] = struct{}{}
+		}
+	}
+	for _, image := range out.UserImages {
+		id, err := strconv.ParseInt(strings.TrimSpace(string(image.UserID)), 10, 64)
+		if err == nil && id > 0 {
+			result[id] = struct{}{}
+		}
 	}
 	return result, nil
 }
