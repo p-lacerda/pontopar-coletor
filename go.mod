@@ -1,4 +1,4 @@
-module github.com/pontopar/pontopar-coletor
+module github.com/p-lacerda/pontopar-coletor
 
 go 1.25.12
 

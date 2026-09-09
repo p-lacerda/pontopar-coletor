@@ -25,7 +25,7 @@ import (
 	"regexp"
 
 	"github.com/creativeprojects/go-selfupdate"
-	"github.com/pontopar/pontopar-coletor/internal/config"
+	"github.com/p-lacerda/pontopar-coletor/internal/config"
 )
 
 // semverRe valida uma versão semver (com "v" opcional). Aceita as formas

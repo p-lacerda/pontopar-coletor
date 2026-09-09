@@ -25,11 +25,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pontopar/pontopar-coletor/internal/applog"
-	"github.com/pontopar/pontopar-coletor/internal/collector"
-	"github.com/pontopar/pontopar-coletor/internal/config"
-	"github.com/pontopar/pontopar-coletor/internal/updater"
-	"github.com/pontopar/pontopar-coletor/internal/winservice"
+	"github.com/p-lacerda/pontopar-coletor/internal/applog"
+	"github.com/p-lacerda/pontopar-coletor/internal/collector"
+	"github.com/p-lacerda/pontopar-coletor/internal/config"
+	"github.com/p-lacerda/pontopar-coletor/internal/updater"
+	"github.com/p-lacerda/pontopar-coletor/internal/winservice"
 )
 
 // version é a versão embutida no build (ldflags). "dev" em builds locais.

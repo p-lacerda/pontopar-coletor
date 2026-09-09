@@ -15,10 +15,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/pontopar/pontopar-coletor/internal/config"
-	"github.com/pontopar/pontopar-coletor/internal/idface"
-	"github.com/pontopar/pontopar-coletor/internal/store"
-	"github.com/pontopar/pontopar-coletor/internal/thera"
+	"github.com/p-lacerda/pontopar-coletor/internal/config"
+	"github.com/p-lacerda/pontopar-coletor/internal/idface"
+	"github.com/p-lacerda/pontopar-coletor/internal/store"
+	"github.com/p-lacerda/pontopar-coletor/internal/thera"
 )
 
 // itoa converte int64 para string (helper local).
