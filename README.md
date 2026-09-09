@@ -3,7 +3,7 @@
 Programa Windows (em Go) que roda numa PC leve **na mesma rede (LAN/WiFi)** do
 aparelho **Control iD iDFace** (linha de Acesso, HTTP porta 80). Faz *polling*
 das batidas faciais do aparelho e encaminha cada batida NOVA para o **Thera** na
-nuvem. Instala-se como **Serviço do Windows** (auto-start no boot), traz uma
+nuvem. Instala-se por um **assistente do Windows** (auto-start no boot), traz uma
 **interface gráfica com ícone na bandeja** e tem **reprocessamento offline**
 (não perde batida se a PC ou o Thera ficarem
 offline) e **auto-update** via GitHub Releases.
@@ -80,7 +80,7 @@ fica ao lado do executável).
 
 ---
 
-## 3. Tela do programa e início automático
+## 3. Tela, assistente de instalação e início automático
 
 Dê dois cliques em `pontopar-coletor.exe`. A tela permite conferir ou alterar
 IP, porta e credenciais do Control iD, salvar a configuração e testar se a PC
@@ -91,9 +91,21 @@ de atualizações já vêm no `config.json` e não são expostos na tela.
   ícone do PontoPar perto do relógio do Windows.
 - Clique no ícone da bandeja para abrir a tela novamente. O menu também tem
   `Fechar janela`, que fecha só a tela; o serviço instalado continua rodando.
-- Clique em **Ativar início com o Windows**. O Windows mostrará a confirmação
-  de administrador (UAC); depois de aceitar, o serviço é instalado, iniciado e
-  configurado para iniciar automaticamente a cada boot.
+- Clique em **Assistente: instalar / desinstalar** e depois em **Instalar e
+  iniciar**. O Windows mostrará a confirmação de administrador (UAC); depois
+  de aceitar, o programa é copiado para
+  `C:\ProgramData\PontoParColetor\`, iniciado e configurado para iniciar a
+  cada boot.
+- O instalador não depende da pasta Downloads: ela pode ser movida ou limpa
+  depois da instalação sem parar a coleta.
+- No mesmo assistente, **Desinstalar serviço** para a coleta e remove o início
+  automático. Configuração, cursor e logs são preservados para não apagar
+  registros de ponto acidentalmente.
+
+O coletor precisa ser instalado como serviço apenas para operar sozinho 24h:
+continuar após reiniciar a PC, mesmo sem usuário logado, e receber reinício
+automático do Windows em caso de falha ou atualização. Para só testar a tela,
+não é necessário instalar.
 
 ## 4. Instalar como serviço do Windows (alternativa por linha de comando)
 
@@ -201,7 +213,10 @@ git push origin v1.2.3    # dispara .github/workflows/release.yml
 
 ```
 cmd/pontopar-coletor/main.go   interface gráfica e CLI de serviço
+cmd/pontopar-coletor/app.manifest + rsrc_windows_amd64.syso
+                                manifesto embutido dos controles visuais Windows
 internal/gui                   janela de configuração + ícone na bandeja
+internal/setup                 assistente de instalação/desinstalação (UAC)
 internal/config                carrega/valida config.json (ao lado do exe)
 internal/idface                cliente do iDFace (login, sessão, access_logs, de-para user→matrícula)
 internal/thera                 cliente do webhook /dao do Thera

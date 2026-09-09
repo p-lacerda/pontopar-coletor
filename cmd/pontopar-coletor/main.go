@@ -29,6 +29,7 @@ import (
 	"github.com/p-lacerda/pontopar-coletor/internal/collector"
 	"github.com/p-lacerda/pontopar-coletor/internal/config"
 	"github.com/p-lacerda/pontopar-coletor/internal/gui"
+	"github.com/p-lacerda/pontopar-coletor/internal/setup"
 	"github.com/p-lacerda/pontopar-coletor/internal/updater"
 	"github.com/p-lacerda/pontopar-coletor/internal/winservice"
 )
@@ -73,6 +74,18 @@ func main() {
 			fatalf("ativar inicio com Windows: %v", err)
 		}
 		fmt.Println("inicio automatico ativado; servico iniciado")
+	case "setup-install":
+		if err := setup.Install(); err != nil {
+			setup.ShowResult("PontoPar — instalação", "Não foi possível instalar:\n"+err.Error(), true)
+			os.Exit(1)
+		}
+		setup.ShowResult("PontoPar — instalação", "Instalação concluída. O coletor iniciou agora e também iniciará automaticamente com o Windows.", false)
+	case "setup-uninstall":
+		if err := setup.Uninstall(); err != nil {
+			setup.ShowResult("PontoPar — desinstalação", "Não foi possível desinstalar:\n"+err.Error(), true)
+			os.Exit(1)
+		}
+		setup.ShowResult("PontoPar — desinstalação", "O serviço foi removido e a coleta foi parada. Configuração e registros foram preservados em ProgramData.", false)
 	case "uninstall", "remove":
 		if err := winservice.Uninstall(); err != nil {
 			fatalf("uninstall: %v", err)

@@ -19,6 +19,7 @@ import (
 	"github.com/lxn/walk"
 	"github.com/lxn/win"
 	"github.com/p-lacerda/pontopar-coletor/internal/config"
+	"github.com/p-lacerda/pontopar-coletor/internal/setup"
 	"github.com/p-lacerda/pontopar-coletor/internal/winservice"
 )
 
@@ -28,7 +29,7 @@ const title = "PontoPar Coletor"
 // ícone da bandeja oferece uma saída explícita para encerrar somente a tela.
 // O serviço, se instalado, segue independente dessa tela.
 func Run(version string) error {
-	dir, err := config.ExeDir()
+	dir, err := setup.ActiveConfigDir()
 	if err != nil {
 		return fmt.Errorf("localizar diretorio do executavel: %w", err)
 	}
@@ -133,7 +134,7 @@ func Run(version string) error {
 	if err != nil {
 		return err
 	}
-	autoButton.SetText("Ativar início com o Windows")
+	autoButton.SetText("Assistente: instalar / desinstalar")
 	logsButton, err := walk.NewPushButton(mw)
 	if err != nil {
 		return err
@@ -176,16 +177,23 @@ func Run(version string) error {
 		status.SetText("Serviço: " + serviceStatus)
 	}
 
-	saveButton.Clicked().Attach(func() {
+	persist := func() error {
 		updated, err := readFields()
 		if err == nil {
 			err = config.Save(dir, updated)
 		}
 		if err != nil {
+			return err
+		}
+		cfg = updated
+		return nil
+	}
+
+	saveButton.Clicked().Attach(func() {
+		if err := persist(); err != nil {
 			walk.MsgBox(mw, title, "Não foi possível salvar:\n"+err.Error(), walk.MsgBoxIconError)
 			return
 		}
-		cfg = updated
 		walk.MsgBox(mw, title, "Configuração salva. Reinicie o serviço para aplicar uma alteração enquanto ele estiver rodando.", walk.MsgBoxIconInformation)
 	})
 
@@ -222,25 +230,9 @@ func Run(version string) error {
 	})
 
 	autoButton.Clicked().Attach(func() {
-		updated, err := readFields()
-		if err == nil {
-			err = config.Save(dir, updated)
+		if err := showSetupWizard(mw, version, dir, persist); err != nil {
+			walk.MsgBox(mw, title, "Não foi possível abrir o assistente:\n"+err.Error(), walk.MsgBoxIconError)
 		}
-		if err != nil {
-			walk.MsgBox(mw, title, "Salve uma configuração válida antes de ativar:\n"+err.Error(), walk.MsgBoxIconError)
-			return
-		}
-		cfg = updated
-		exe, err := os.Executable()
-		if err != nil {
-			walk.MsgBox(mw, title, "Não foi possível localizar o programa:\n"+err.Error(), walk.MsgBoxIconError)
-			return
-		}
-		if !win.ShellExecute(mw.Handle(), syscall.StringToUTF16Ptr("runas"), syscall.StringToUTF16Ptr(exe), syscall.StringToUTF16Ptr("install-start"), syscall.StringToUTF16Ptr(dir), win.SW_SHOWNORMAL) {
-			walk.MsgBox(mw, title, "O Windows não abriu o pedido de administrador. Execute o programa como administrador e tente novamente.", walk.MsgBoxIconError)
-			return
-		}
-		walk.MsgBox(mw, title, "Aceite a confirmação do Windows. O coletor será registrado para iniciar automaticamente e iniciado agora.", walk.MsgBoxIconInformation)
 	})
 
 	logsButton.Clicked().Attach(func() {
@@ -334,4 +326,115 @@ func nonNegativeInt64(raw, name string) (int64, error) {
 		return 0, fmt.Errorf("%s deve ser zero ou um número inteiro positivo", name)
 	}
 	return n, nil
+}
+
+// showSetupWizard concentra a operação que precisa de administrador em uma
+// tela simples. O processo elevado faz a cópia/serviço e mostra o resultado.
+func showSetupWizard(owner *walk.MainWindow, version, configDir string, persist func() error) error {
+	dlg, err := walk.NewDialogWithFixedSize(owner)
+	if err != nil {
+		return err
+	}
+	dlg.SetTitle("Assistente de instalação PontoPar")
+	if err := dlg.SetLayout(walk.NewVBoxLayout()); err != nil {
+		return err
+	}
+	if err := dlg.SetSize(walk.Size{Width: 540, Height: 315}); err != nil {
+		return err
+	}
+
+	header, err := walk.NewLabel(dlg)
+	if err != nil {
+		return err
+	}
+	header.SetText("PontoPar Coletor " + version)
+	description, err := walk.NewLabel(dlg)
+	if err != nil {
+		return err
+	}
+	description.SetText("Instalar coloca o coletor em uma pasta fixa do Windows, inicia agora e deixa a coleta automática após cada reinício — mesmo sem ninguém conectado na PC.")
+	destination, err := walk.NewLabel(dlg)
+	if err != nil {
+		return err
+	}
+	destination.SetText("Pasta de instalação: " + setup.InstallDir())
+	serviceStatus, err := winservice.Status()
+	if err != nil {
+		serviceStatus = "não foi possível consultar"
+	}
+	status, err := walk.NewLabel(dlg)
+	if err != nil {
+		return err
+	}
+	status.SetText("Estado atual do serviço: " + serviceStatus)
+	note, err := walk.NewLabel(dlg)
+	if err != nil {
+		return err
+	}
+	note.SetText("Desinstalar para a coleta e remove o serviço, mas mantém configuração e registros. Assim, nenhum dado de ponto é apagado por engano.")
+
+	buttons, err := walk.NewComposite(dlg)
+	if err != nil {
+		return err
+	}
+	if err := buttons.SetLayout(walk.NewHBoxLayout()); err != nil {
+		return err
+	}
+	installButton, err := walk.NewPushButton(buttons)
+	if err != nil {
+		return err
+	}
+	installButton.SetText("Instalar e iniciar")
+	uninstallButton, err := walk.NewPushButton(buttons)
+	if err != nil {
+		return err
+	}
+	uninstallButton.SetText("Desinstalar serviço")
+	closeButton, err := walk.NewPushButton(buttons)
+	if err != nil {
+		return err
+	}
+	closeButton.SetText("Fechar")
+
+	installButton.Clicked().Attach(func() {
+		if err := persist(); err != nil {
+			walk.MsgBox(dlg, title, "Confira e salve uma configuração válida:\n"+err.Error(), walk.MsgBoxIconError)
+			return
+		}
+		answer := walk.MsgBox(dlg, "Instalar PontoPar", "O Windows pedirá autorização de administrador.\n\nDepois de aceitar, o coletor será copiado para a pasta fixa, iniciado agora e configurado para iniciar com o Windows.\n\nContinuar?", walk.MsgBoxYesNo|walk.MsgBoxIconQuestion)
+		if answer != walk.DlgCmdYes {
+			return
+		}
+		if err := runElevated(dlg, "setup-install", configDir); err != nil {
+			walk.MsgBox(dlg, title, err.Error(), walk.MsgBoxIconError)
+			return
+		}
+		walk.MsgBox(dlg, title, "Aceite a confirmação do Windows. O resultado aparecerá em seguida.", walk.MsgBoxIconInformation)
+	})
+
+	uninstallButton.Clicked().Attach(func() {
+		answer := walk.MsgBox(dlg, "Desinstalar PontoPar", "Isso vai parar a coleta e remover o início automático.\n\nA configuração, o cursor e os registros serão mantidos para não apagar dados de ponto.\n\nContinuar?", walk.MsgBoxYesNo|walk.MsgBoxIconWarning)
+		if answer != walk.DlgCmdYes {
+			return
+		}
+		if err := runElevated(dlg, "setup-uninstall", configDir); err != nil {
+			walk.MsgBox(dlg, title, err.Error(), walk.MsgBoxIconError)
+			return
+		}
+		walk.MsgBox(dlg, title, "Aceite a confirmação do Windows. O resultado aparecerá em seguida.", walk.MsgBoxIconInformation)
+	})
+	closeButton.Clicked().Attach(func() { dlg.Close(walk.DlgCmdCancel) })
+	dlg.Run()
+	return nil
+}
+
+func runElevated(owner walk.Form, command, workingDir string) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("não foi possível localizar o programa: %w", err)
+	}
+	if !win.ShellExecute(owner.Handle(), syscall.StringToUTF16Ptr("runas"), syscall.StringToUTF16Ptr(exe), syscall.StringToUTF16Ptr(command), syscall.StringToUTF16Ptr(workingDir), win.SW_SHOWNORMAL) {
+		return fmt.Errorf("o Windows não abriu o pedido de administrador; execute o programa como administrador e tente novamente")
+	}
+	return nil
 }
