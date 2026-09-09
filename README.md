@@ -80,7 +80,25 @@ fica ao lado do executável).
 
 ---
 
-## 3. Tela, assistente de instalação e início automático
+## 3. Instalar pelo PontoPar Setup (recomendado)
+
+Baixe e dê dois cliques em `PontoPar-Setup_vX.Y.Z_windows_amd64.exe` na seção
+**Releases**. Ele é um instalador separado — não é o programa coletor.
+
+1. O Windows pede autorização de administrador uma única vez.
+2. Preencha ou confira os dados do Control iD e do Thera.
+3. Clique em **Instalar e iniciar**.
+
+O setup copia o coletor para `C:\ProgramData\PontoParColetor\`, registra o
+serviço de início automático e cria a entrada **PontoPar Coletor** em
+**Configurações → Aplicativos instalados**. A desinstalação por essa tela ou
+pelo próprio Setup para a coleta e remove o serviço, preservando configuração,
+cursor e logs para não apagar registros de ponto sem querer.
+
+> A release pública não carrega senha ou `deviceSecret` de cliente. Para uma
+> instalação já preenchida, gere e entregue um Setup privado do cliente.
+
+## 4. Tela do coletor e início automático
 
 Dê dois cliques em `pontopar-coletor.exe`. A tela permite conferir ou alterar
 IP, porta e credenciais do Control iD, salvar a configuração e testar se a PC
@@ -107,7 +125,7 @@ continuar após reiniciar a PC, mesmo sem usuário logado, e receber reinício
 automático do Windows em caso de falha ou atualização. Para só testar a tela,
 não é necessário instalar.
 
-## 4. Instalar como serviço do Windows (alternativa por linha de comando)
+## 5. Instalar como serviço do Windows (alternativa por linha de comando)
 
 Baixe o `pontopar-coletor.exe` mais recente (das Releases) e coloque numa pasta
 fixa, ex.: `C:\PontoPar\`. Ao lado dele, crie o `config.json`.
@@ -145,7 +163,7 @@ id=...`.
 
 ---
 
-## 5. Auto-update (GitHub Releases)
+## 6. Auto-update (GitHub Releases)
 
 O coletor checa a release `latest` do repositório em `update.repo` a cada
 `update.checkHours`. Se houver uma versão **maior** (semver) que a embutida:
@@ -178,6 +196,7 @@ Cada release precisa conter:
 
 - `pontopar-coletor_vX.Y.Z_windows_amd64.exe` (o sufixo `windows_amd64.exe` é o
   que o updater casa por OS/arch);
+- `PontoPar-Setup_vX.Y.Z_windows_amd64.exe` (instalador com tela e UAC);
 - `checksums.txt` (formato `sha256sum`: `<hash>  <nome-do-arquivo>`), listando
   exatamente o nome do `.exe` publicado.
 
@@ -186,7 +205,7 @@ uma tag `v*`.
 
 ---
 
-## 6. Build (desenvolvimento)
+## 7. Build (desenvolvimento)
 
 Go 1.24+ (o alvo é `windows/amd64`; compila no Linux — é Go puro +
 `golang.org/x/sys/windows`).
@@ -209,12 +228,13 @@ git push origin v1.2.3    # dispara .github/workflows/release.yml
 
 ---
 
-## 7. Estrutura do projeto
+## 8. Estrutura do projeto
 
 ```
 cmd/pontopar-coletor/main.go   interface gráfica e CLI de serviço
 cmd/pontopar-coletor/app.manifest + rsrc_windows_amd64.syso
                                 manifesto embutido dos controles visuais Windows
+cmd/pontopar-installer          PontoPar-Setup: instalador/desinstalador Windows
 internal/gui                   janela de configuração + ícone na bandeja
 internal/setup                 assistente de instalação/desinstalação (UAC)
 internal/config                carrega/valida config.json (ao lado do exe)
@@ -230,7 +250,7 @@ internal/applog                log em arquivo (rotativo) + console no modo run
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 - **`install` diz "conectar ao SCM (rode como Administrador)":** abra o Prompt
   **como Administrador**. `install`/`uninstall`/`start`/`stop` exigem elevação.

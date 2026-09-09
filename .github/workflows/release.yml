@@ -1,7 +1,8 @@
 name: release
 
 # Dispara ao empurrar uma tag "v*" (ex.: v1.2.3). Compila o binário Windows,
-# gera os checksums SHA256 e cria a GitHub Release anexando o .exe + checksums.txt.
+# gera os checksums SHA256 e cria a GitHub Release anexando o coletor, o
+# instalador PontoPar-Setup e checksums.txt.
 # É exatamente o layout que o auto-update (creativeprojects/go-selfupdate com
 # ChecksumValidator{UniqueFilename:"checksums.txt"}) consome.
 
@@ -38,12 +39,20 @@ jobs:
           #   {cmd}([_-]v?SEMVER)?([_-]{os}[_-]{arch})?(\.exe)?
           # onde {cmd} == "pontopar-coletor" (nome do exe instalado no cliente).
           ASSET="pontopar-coletor_${VERSION}_windows_amd64.exe"
+          SETUP_ASSET="PontoPar-Setup_${VERSION}_windows_amd64.exe"
           mkdir -p dist
           # -H windowsgui evita abrir uma janela de terminal quando o usuário
           # dá dois cliques no programa; a interface e a bandeja são nativas.
           go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=${VERSION}" \
             -o "dist/${ASSET}" ./cmd/pontopar-coletor
+          # O instalador é outro .exe: ele embute o coletor acima. A configuração
+          # que vai ao GitHub é apenas o modelo sem segredos; o assistente pede os
+          # campos necessários na instalação.
+          cp "dist/${ASSET}" cmd/pontopar-installer/payload/pontopar-coletor.exe
+          go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=${VERSION}" \
+            -o "dist/${SETUP_ASSET}" ./cmd/pontopar-installer
           echo "ASSET=${ASSET}" >> "$GITHUB_ENV"
+          echo "SETUP_ASSET=${SETUP_ASSET}" >> "$GITHUB_ENV"
 
       - name: Generate checksums.txt
         run: |
@@ -51,7 +60,7 @@ jobs:
           cd dist
           # Uma linha por arquivo: "<sha256>  <nome-do-arquivo>" (formato sha256sum).
           # O nome DEVE bater exatamente com o do asset publicado.
-          sha256sum "${ASSET}" > checksums.txt
+          sha256sum "${ASSET}" "${SETUP_ASSET}" > checksums.txt
           echo "----- checksums.txt -----"
           cat checksums.txt
 
@@ -63,4 +72,5 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             dist/${{ env.ASSET }}
+            dist/${{ env.SETUP_ASSET }}
             dist/checksums.txt
