@@ -480,6 +480,28 @@ func (c *Client) listImageIDs(ctx context.Context) (map[int64]struct{}, error) {
 	return result, nil
 }
 
+// GetUserImage lê a foto JPEG cadastrada no aparelho, sem persistê-la localmente.
+func (c *Client) GetUserImage(ctx context.Context, id int64) ([]byte, error) {
+	if err := c.EnsureSession(ctx); err != nil {
+		return nil, err
+	}
+	endpoint := c.base + "/user_get_image.fcgi?user_id=" + strconv.FormatInt(id, 10) + "&get_timestamp=0&session=" + url.QueryEscape(c.Session())
+	data, status, err := c.getBytes(ctx, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		c.ClearSession()
+	}
+	if status < 200 || status >= 300 {
+		return nil, fmt.Errorf("buscar face %d respondeu %d", id, status)
+	}
+	if len(data) == 0 || len(data) > 2<<20 {
+		return nil, fmt.Errorf("face %d inválida", id)
+	}
+	return data, nil
+}
+
 // UpsertUsers cria ou atualiza usuários por matrícula. Usuários já existentes
 // são encontrados no aparelho, portanto nunca há duplicação por retry.
 // Usuários ativos têm EndTime=0; inativos recebem EndTime=agora (o firmware
@@ -601,5 +623,19 @@ func (c *Client) postBytes(ctx context.Context, endpoint, contentType string, bo
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(resp.Body)
+	return data, resp.StatusCode, err
+}
+
+func (c *Client) getBytes(ctx context.Context, endpoint string) ([]byte, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20+1))
 	return data, resp.StatusCode, err
 }

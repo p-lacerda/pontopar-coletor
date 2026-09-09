@@ -9,6 +9,7 @@ package thera
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -64,6 +65,7 @@ type SyncUser struct {
 	Registration string `json:"registration"`
 	Enabled      bool   `json:"enabled"`
 	FaceURL      string `json:"faceUrl"`
+	ImportFace   bool   `json:"importFace"`
 }
 
 type SyncManifest struct {
@@ -103,6 +105,21 @@ func (c *Client) PostSyncResult(ctx context.Context, users []SyncObservation) er
 	}
 	if status < 200 || status >= 300 {
 		return fmt.Errorf("Thera /sync/result respondeu %d: %s", status, strings.TrimSpace(string(data)))
+	}
+	return nil
+}
+
+func (c *Client) PostFace(ctx context.Context, registration string, image []byte) error {
+	body, err := json.Marshal(map[string]string{"registration": registration, "imageBase64": base64.StdEncoding.EncodeToString(image)})
+	if err != nil {
+		return err
+	}
+	data, status, err := c.request(ctx, http.MethodPost, c.syncURL+"/face", bytes.NewReader(body), "application/json")
+	if err != nil {
+		return err
+	}
+	if status < 200 || status >= 300 {
+		return fmt.Errorf("Thera /sync/face respondeu %d: %s", status, strings.TrimSpace(string(data)))
 	}
 	return nil
 }

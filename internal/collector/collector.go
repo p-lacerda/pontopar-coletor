@@ -178,7 +178,20 @@ func (c *Collector) syncUsers(ctx context.Context) error {
 		return err
 	}
 	result := make([]thera.SyncObservation, 0, len(observed))
+	importar := make(map[string]bool, len(manifest.Users))
+	for _, wanted := range manifest.Users {
+		importar[wanted.Registration] = wanted.ImportFace
+	}
 	for _, user := range observed {
+		if user.ImageRegistered && importar[user.Registration] {
+			image, faceErr := c.device.GetUserImage(ctx, user.Id)
+			if faceErr != nil {
+				return fmt.Errorf("ler face matrícula %s: %w", user.Registration, faceErr)
+			}
+			if faceErr = c.thera.PostFace(ctx, user.Registration, image); faceErr != nil {
+				return fmt.Errorf("enviar face matrícula %s: %w", user.Registration, faceErr)
+			}
+		}
 		result = append(result, thera.SyncObservation{UserID: itoa(user.Id), Registration: user.Registration, FaceEnrolled: user.ImageRegistered})
 	}
 	if err := c.thera.PostSyncResult(ctx, result); err != nil {
