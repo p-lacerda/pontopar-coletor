@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // FlexStr é uma string que, no JSON, aceita número OU string. O firmware do
@@ -90,6 +91,31 @@ type deviceUser struct {
 	Registration FlexStr `json:"registration"`
 }
 
+// User é a representação mínima de um usuário do iDFace necessária para
+// sincronização. O aparelho não possui um campo "enabled"; a validade é
+// controlada por EndTime (0 = sem expiração).
+type User struct {
+	Id           int64
+	Registration string
+	Name         string
+	BeginTime    int64
+	EndTime      int64
+	Enabled      bool
+	Image        []byte // opcional; JPEG para cadastro facial
+}
+
+// UserSnapshot é retornado por ListUsers. ImageRegistered vem de
+// user_list_images.fcgi e permite a UI mostrar se há face no aparelho sem
+// expor o conteúdo biométrico.
+type UserSnapshot struct {
+	Id              int64
+	Registration    string
+	Name            string
+	BeginTime       int64
+	EndTime         int64
+	ImageRegistered bool
+}
+
 // Logger é a interface mínima de log usada pelo cliente.
 type Logger interface {
 	Infof(format string, args ...any)
@@ -98,13 +124,13 @@ type Logger interface {
 
 // Client é o cliente HTTP do iDFace.
 type Client struct {
-	base   string
-	login  string
-	pass   string
-	http   *http.Client
-	log    Logger
+	base  string
+	login string
+	pass  string
+	http  *http.Client
+	log   Logger
 
-	mu       sync.Mutex        // protege session e regCache
+	mu       sync.Mutex // protege session e regCache
 	session  string
 	regCache map[string]string // user_id -> registration ("" = consultado, sem matrícula)
 }
@@ -364,4 +390,194 @@ func (c *Client) ResolveRegistrations(ctx context.Context, userIds []string) {
 		}
 	}
 	c.mu.Unlock()
+}
+
+// ListUsers lista usuários e indica quais possuem face cadastrada. É uma
+// operação somente de leitura, útil para conferência/relatório.
+func (c *Client) ListUsers(ctx context.Context) ([]UserSnapshot, error) {
+	if err := c.EnsureSession(ctx); err != nil {
+		return nil, err
+	}
+	body := map[string]any{"object": "users", "fields": []string{"id", "registration", "name", "begin_time", "end_time"}, "limit": 10000}
+	data, status, err := c.postJSON(ctx, c.base+"/load_objects.fcgi?session="+url.QueryEscape(c.Session()), body)
+	if err != nil {
+		return nil, fmt.Errorf("listar usuários: %w", err)
+	}
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		c.ClearSession()
+	}
+	if status < 200 || status >= 300 {
+		return nil, fmt.Errorf("listar usuários respondeu %d: %s", status, strings.TrimSpace(string(data)))
+	}
+	var out struct {
+		Users []struct {
+			Id           FlexStr `json:"id"`
+			Registration FlexStr `json:"registration"`
+			Name         string  `json:"name"`
+			BeginTime    int64   `json:"begin_time"`
+			EndTime      int64   `json:"end_time"`
+		} `json:"users"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("resposta inválida de usuários: %w", err)
+	}
+	images, err := c.listImageIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]UserSnapshot, 0, len(out.Users))
+	for _, u := range out.Users {
+		id, err := strconv.ParseInt(string(u.Id), 10, 64)
+		if err != nil {
+			continue
+		}
+		_, has := images[id]
+		result = append(result, UserSnapshot{Id: id, Registration: strings.TrimSpace(string(u.Registration)), Name: u.Name, BeginTime: u.BeginTime, EndTime: u.EndTime, ImageRegistered: has})
+	}
+	return result, nil
+}
+
+func (c *Client) listImageIDs(ctx context.Context) (map[int64]struct{}, error) {
+	data, status, err := c.postJSON(ctx, c.base+"/user_list_images.fcgi?session="+url.QueryEscape(c.Session()), "{}")
+	if err != nil {
+		return nil, fmt.Errorf("listar faces: %w", err)
+	}
+	if status < 200 || status >= 300 {
+		return nil, fmt.Errorf("listar faces respondeu %d: %s", status, strings.TrimSpace(string(data)))
+	}
+	var out struct {
+		UserIDs []int64 `json:"user_ids"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("resposta inválida de faces: %w", err)
+	}
+	result := make(map[int64]struct{}, len(out.UserIDs))
+	for _, id := range out.UserIDs {
+		result[id] = struct{}{}
+	}
+	return result, nil
+}
+
+// UpsertUsers cria ou atualiza usuários por matrícula. Usuários já existentes
+// são encontrados no aparelho, portanto nunca há duplicação por retry.
+// Usuários ativos têm EndTime=0; inativos recebem EndTime=agora (o firmware
+// deixa de aceitá-los). Não remove usuários desconhecidos automaticamente.
+func (c *Client) UpsertUsers(ctx context.Context, users []User, now int64) error {
+	if len(users) == 0 {
+		return nil
+	}
+	if now <= 0 {
+		now = time.Now().Unix()
+	}
+	if err := c.EnsureSession(ctx); err != nil {
+		return err
+	}
+	values := make([]map[string]any, 0, len(users))
+	// Resolver uma vez evita que retries criem usuários duplicados: a API só
+	// faz upsert quando o id está presente.
+	existing, err := c.ListUsers(ctx)
+	if err != nil {
+		return err
+	}
+	byReg := make(map[string]int64, len(existing))
+	for _, old := range existing {
+		if old.Id != 0 && old.Registration != "" {
+			byReg[old.Registration] = old.Id
+		}
+	}
+	for _, u := range users {
+		reg := strings.TrimSpace(u.Registration)
+		name := strings.TrimSpace(u.Name)
+		if reg == "" || name == "" {
+			return fmt.Errorf("usuário sem matrícula ou nome")
+		}
+		end := u.EndTime
+		if u.Enabled {
+			end = 0
+		} else if end == 0 {
+			end = now
+		}
+		if end < 0 {
+			end = 0
+		}
+		value := map[string]any{"registration": reg, "name": name, "begin_time": u.BeginTime, "end_time": end}
+		if id := byReg[reg]; id != 0 {
+			value["id"] = id
+		}
+		values = append(values, value)
+	}
+	body := map[string]any{"object": "users", "values": values}
+	data, status, err := c.postJSON(ctx, c.base+"/create_or_modify_objects.fcgi?session="+url.QueryEscape(c.Session()), body)
+	if err != nil {
+		return fmt.Errorf("sincronizar usuários: %w", err)
+	}
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		c.ClearSession()
+	}
+	if status < 200 || status >= 300 {
+		return fmt.Errorf("sincronizar usuários respondeu %d: %s", status, strings.TrimSpace(string(data)))
+	}
+	// A API não retorna os IDs quando faz upsert; recarregamos por matrícula
+	// apenas para cadastrar as imagens opcionais sem adivinhar IDs.
+	if err := c.syncImages(ctx, users); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Client) syncImages(ctx context.Context, users []User) error {
+	for _, u := range users {
+		if len(u.Image) == 0 {
+			continue
+		}
+		id, err := c.findUserID(ctx, u.Registration)
+		if err != nil {
+			return err
+		}
+		endpoint := c.base + "/user_set_image.fcgi?user_id=" + strconv.FormatInt(id, 10) + "&timestamp=" + strconv.FormatInt(time.Now().Unix(), 10) + "&match=1&session=" + url.QueryEscape(c.Session())
+		data, status, err := c.postBytes(ctx, endpoint, "image/jpeg", u.Image)
+		if err != nil {
+			return fmt.Errorf("cadastrar face %s: %w", u.Registration, err)
+		}
+		if status < 200 || status >= 300 {
+			return fmt.Errorf("cadastrar face %s respondeu %d: %s", u.Registration, status, strings.TrimSpace(string(data)))
+		}
+	}
+	return nil
+}
+
+func (c *Client) findUserID(ctx context.Context, registration string) (int64, error) {
+	body := map[string]any{"object": "users", "fields": []string{"id", "registration"}, "where": []map[string]any{{"object": "users", "field": "registration", "operator": "=", "value": registration}}, "limit": 1}
+	data, status, err := c.postJSON(ctx, c.base+"/load_objects.fcgi?session="+url.QueryEscape(c.Session()), body)
+	if err != nil {
+		return 0, err
+	}
+	if status < 200 || status >= 300 {
+		return 0, fmt.Errorf("buscar usuário respondeu %d", status)
+	}
+	var out struct {
+		Users []deviceUser `json:"users"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return 0, err
+	}
+	if len(out.Users) == 0 {
+		return 0, fmt.Errorf("usuário %s não encontrado após sincronização", registration)
+	}
+	return strconv.ParseInt(string(out.Users[0].Id), 10, 64)
+}
+
+func (c *Client) postBytes(ctx context.Context, endpoint, contentType string, body []byte) ([]byte, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Content-Type", contentType)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	return data, resp.StatusCode, err
 }
