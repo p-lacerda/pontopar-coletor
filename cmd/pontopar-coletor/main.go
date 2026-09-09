@@ -54,9 +54,7 @@ func main() {
 	// Modo interativo: despacha subcomando.
 	args := os.Args[1:]
 	if len(args) == 0 {
-		if err := gui.Run(version); err != nil {
-			fatalf("interface grafica: %v", err)
-		}
+		runGUI()
 		return
 	}
 
@@ -112,9 +110,7 @@ func main() {
 		// Windows; no Linux apenas executa a função de trabalho.
 		runService(true)
 	case "gui", "interface":
-		if err := gui.Run(version); err != nil {
-			fatalf("interface grafica: %v", err)
-		}
+		runGUI()
 	case "version", "--version", "-v":
 		fmt.Println(version)
 	case "help", "--help", "-h":
@@ -123,6 +119,15 @@ func main() {
 		fmt.Fprintf(os.Stderr, "subcomando desconhecido: %q\n\n", cmd)
 		usage()
 		os.Exit(2)
+	}
+}
+
+// runGUI nunca deixa um erro de abertura invisível em builds windowsgui. Isso
+// acontece, por exemplo, se alguém copiar apenas o .exe sem o config.json.
+func runGUI() {
+	if err := gui.Run(version); err != nil {
+		gui.ShowStartupError(err)
+		os.Exit(1)
 	}
 }
 

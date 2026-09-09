@@ -25,6 +25,14 @@ import (
 
 const title = "PontoPar Coletor"
 
+// ShowStartupError mostra uma mensagem mesmo quando a própria janela principal
+// não conseguiu ser criada. Sem isto, um binário windowsgui fecharia em silêncio
+// se o config.json estivesse ausente ou inválido.
+func ShowStartupError(err error) {
+	message := "O PontoPar não conseguiu abrir.\n\n" + err.Error() + "\n\nConfira se o arquivo config.json está na mesma pasta do pontopar-coletor.exe."
+	win.MessageBox(0, syscall.StringToUTF16Ptr(message), syscall.StringToUTF16Ptr(title), win.MB_OK|win.MB_ICONERROR)
+}
+
 // Run abre a tela. Fechar a janela a esconde na bandeja do Windows; o menu do
 // ícone da bandeja oferece uma saída explícita para encerrar somente a tela.
 // O serviço, se instalado, segue independente dessa tela.
