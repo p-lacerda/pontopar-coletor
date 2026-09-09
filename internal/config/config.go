@@ -68,6 +68,16 @@ type Config struct {
 	Update       UpdateConfig `json:"update"`
 }
 
+// Default devolve uma configuração inicial segura para a interface. Ela não
+// contém segredo nem credenciais válidas; o usuário precisa preencher e salvar
+// antes de iniciar o serviço. Isso permite abrir o programa recém-baixado sem
+// depender de um config.json externo.
+func Default() *Config {
+	return &Config{DevicePort: 80, Login: "admin", PollSeconds: 15,
+		TheraBase: "https://xi6vuuvift.us-east-1.awsapprunner.com",
+		Update:    UpdateConfig{Repo: "p-lacerda/pontopar-coletor", CheckHours: 6}}
+}
+
 // Port devolve a porta do device (default 80).
 func (c *Config) Port() int {
 	if c.DevicePort == 0 {

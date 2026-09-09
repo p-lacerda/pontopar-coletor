@@ -43,7 +43,10 @@ func Run(version string) error {
 	}
 	cfg, err := config.Load(dir)
 	if err != nil {
-		return err
+		// Cópias recém-baixadas não têm config.json ao lado do exe. Abra a
+		// interface com defaults para que o usuário possa preencher e salvar,
+		// em vez de falhar silenciosamente antes de mostrar os campos.
+		cfg = config.Default()
 	}
 
 	mw, err := walk.NewMainWindow()
