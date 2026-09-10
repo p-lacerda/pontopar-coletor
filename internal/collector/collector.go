@@ -162,19 +162,18 @@ func (c *Collector) syncUsers(ctx context.Context) error {
 	if manifest.DeviceID != "" && c.cfg.DeviceIdInt() != 0 && manifest.DeviceID != itoa(c.cfg.DeviceIdInt()) {
 		return fmt.Errorf("manifesto é do device %s, configurado %s", manifest.DeviceID, itoa(c.cfg.DeviceIdInt()))
 	}
+	var face *thera.DeviceConfiguration
 	if manifest.Configuration != nil {
-		face := *manifest.Configuration
+		config := *manifest.Configuration
 		// Valores preenchidos no Setup têm precedência local; a API continua
 		// sendo o canal de sincronização quando o coletor volta online.
 		if c.cfg.Facial.IdentificationDistanceCm != 0 {
-			face.IdentificationDistanceCm = c.cfg.Facial.IdentificationDistanceCm
-			face.EnablePhotoUpload = c.cfg.Facial.EnablePhotoUpload
-			face.LivenessMode = c.cfg.Facial.LivenessMode
-			face.LimitDisplayRegion = c.cfg.Facial.LimitDisplayRegion
+			config.IdentificationDistanceCm = c.cfg.Facial.IdentificationDistanceCm
+			config.EnablePhotoUpload = c.cfg.Facial.EnablePhotoUpload
+			config.LivenessMode = c.cfg.Facial.LivenessMode
+			config.LimitDisplayRegion = c.cfg.Facial.LimitDisplayRegion
 		}
-		if err := c.device.SetFacialConfiguration(ctx, face.EnablePhotoUpload, face.LivenessMode, face.LimitDisplayRegion, face.IdentificationDistanceCm); err != nil {
-			return fmt.Errorf("aplicar configuração facial: %w", err)
-		}
+		face = &config
 	}
 	// Lê o aparelho ANTES de aplicar o manifesto. O servidor compara esta
 	// observação com a última registrada e reconhece mudanças feitas diretamente
@@ -202,6 +201,27 @@ func (c *Collector) syncUsers(ctx context.Context) error {
 	}
 	if err := c.device.UpsertUsers(ctx, users, time.Now().Unix()); err != nil {
 		return err
+	}
+	if face != nil && face.EnforceSchedules {
+		schedules := make([]idface.Schedule, 0, len(manifest.Configuration.Schedules))
+		for _, s := range manifest.Configuration.Schedules {
+			rules := make([]idface.ScheduleRule, 0, len(s.Rules))
+			for _, r := range s.Rules {
+				rules = append(rules, idface.ScheduleRule{Weekday: r.Weekday, Entrada: r.Entrada, SaidaIntervalo: r.SaidaIntervalo, RetornoIntervalo: r.RetornoIntervalo, Saida: r.Saida})
+			}
+			schedules = append(schedules, idface.Schedule{ScheduleID: s.ScheduleID, Name: s.Name, EmployeeRegistrations: s.EmployeeRegistrations, Rules: rules})
+		}
+		if err := c.device.ApplySchedules(ctx, schedules); err != nil {
+			return fmt.Errorf("aplicar escalas: %w", err)
+		}
+	}
+	// Só muda o terminal para standalone DEPOIS que todas as regras foram
+	// publicadas. Assim uma falha intermediária nunca deixa o relógio em modo
+	// de autorização sem uma regra válida.
+	if face != nil {
+		if err := c.device.SetFacialConfiguration(ctx, face.EnablePhotoUpload, face.LivenessMode, face.LimitDisplayRegion, face.IdentificationDistanceCm, face.EnforceSchedules); err != nil {
+			return fmt.Errorf("aplicar configuração facial: %w", err)
+		}
 	}
 	observed, err := c.device.ListUsers(ctx)
 	if err != nil {

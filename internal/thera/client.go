@@ -76,10 +76,27 @@ type SyncManifest struct {
 	Configuration *DeviceConfiguration `json:"configuration,omitempty"`
 }
 type DeviceConfiguration struct {
-	EnablePhotoUpload        bool    `json:"enablePhotoUpload"`
-	LivenessMode             bool    `json:"livenessMode"`
-	LimitDisplayRegion       bool    `json:"limitDisplayRegion"`
-	IdentificationDistanceCm float64 `json:"identificationDistanceCm,omitempty"`
+	EnablePhotoUpload        bool             `json:"enablePhotoUpload"`
+	LivenessMode             bool             `json:"livenessMode"`
+	LimitDisplayRegion       bool             `json:"limitDisplayRegion"`
+	IdentificationDistanceCm float64          `json:"identificationDistanceCm,omitempty"`
+	EnforceSchedules         bool             `json:"enforceSchedules"`
+	Schedules                []DeviceSchedule `json:"schedules,omitempty"`
+}
+
+type DeviceScheduleRule struct {
+	Weekday          int  `json:"weekday"`
+	Entrada          *int `json:"entrada"`
+	SaidaIntervalo   *int `json:"saidaIntervalo"`
+	RetornoIntervalo *int `json:"retornoIntervalo"`
+	Saida            *int `json:"saida"`
+}
+
+type DeviceSchedule struct {
+	ScheduleID            string               `json:"scheduleId"`
+	Name                  string               `json:"name"`
+	EmployeeRegistrations []string             `json:"employeeRegistrations"`
+	Rules                 []DeviceScheduleRule `json:"rules"`
 }
 type SyncObservation struct {
 	UserID       string `json:"userId"`

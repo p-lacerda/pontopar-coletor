@@ -117,6 +117,23 @@ type UserSnapshot struct {
 	ImageRegistered bool
 }
 
+// ScheduleRule é uma regra semanal do Thera em minutos desde 00:00.
+type ScheduleRule struct {
+	Weekday          int
+	Entrada          *int
+	SaidaIntervalo   *int
+	RetornoIntervalo *int
+	Saida            *int
+}
+
+// Schedule é a jornada do Thera associada a uma ou mais matrículas.
+type Schedule struct {
+	ScheduleID            string
+	Name                  string
+	EmployeeRegistrations []string
+	Rules                 []ScheduleRule
+}
+
 // Logger é a interface mínima de log usada pelo cliente.
 type Logger interface {
 	Infof(format string, args ...any)
@@ -247,7 +264,7 @@ func (c *Client) EnsureSession(ctx context.Context) error {
 // SetFacialConfiguration aplica configurações idempotentes do iDFace. O
 // servidor só envia esse pequeno objeto no manifesto; nada fica acumulado no
 // processo do coletor.
-func (c *Client) SetFacialConfiguration(ctx context.Context, enablePhotoUpload, livenessMode, limitDisplayRegion bool, identificationDistanceCm float64) error {
+func (c *Client) SetFacialConfiguration(ctx context.Context, enablePhotoUpload, livenessMode, limitDisplayRegion bool, identificationDistanceCm float64, enforceSchedules bool) error {
 	toFlag := func(v bool) string {
 		if v {
 			return "1"
@@ -259,12 +276,11 @@ func (c *Client) SetFacialConfiguration(ctx context.Context, enablePhotoUpload, 
 		// O firmware recebe min_detect_bounds_width, não centímetros.
 		face["min_detect_bounds_width"] = strconv.FormatFloat(11.6/identificationDistanceCm, 'f', 2, 64)
 	}
-	// Este terminal é usado como relógio de ponto, não como controlador de
-	// porta. No modo ponto o firmware registra a identificação de qualquer
-	// usuário cadastrado e não aplica access_rules/time_zones, que eram a causa
-	// do aviso "não autorizado" quando só a escala do Thera existia.
+	// Quando a empresa publica jornadas, o terminal precisa sair do modo ponto
+	// puro para que o firmware avalie access_rules/time_zones. Sem jornadas,
+	// preservamos attendance_mode=1, que aceita qualquer usuário cadastrado.
 	body := map[string]any{
-		"general":    map[string]string{"attendance_mode": "1"},
+		"general":    map[string]string{"attendance_mode": map[bool]string{true: "0", false: "1"}[enforceSchedules]},
 		"identifier": map[string]string{"log_type": "0"},
 		"monitor":    map[string]string{"enable_photo_upload": toFlag(enablePhotoUpload)},
 		"face_id":    face,
@@ -277,6 +293,270 @@ func (c *Client) SetFacialConfiguration(ctx context.Context, enablePhotoUpload, 
 		return fmt.Errorf("set_configuration respondeu %d", status)
 	}
 	return nil
+}
+
+func (c *Client) loadObjects(ctx context.Context, object string, fields []string) ([]map[string]json.RawMessage, error) {
+	body := map[string]any{"object": object, "fields": fields, "limit": 10000}
+	data, status, err := c.postJSON(ctx, c.base+"/load_objects.fcgi?session="+url.QueryEscape(c.Session()), body)
+	if err != nil {
+		return nil, err
+	}
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		c.ClearSession()
+	}
+	if status < 200 || status >= 300 {
+		return nil, fmt.Errorf("listar %s respondeu %d: %s", object, status, strings.TrimSpace(string(data)))
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("resposta inválida de %s: %w", object, err)
+	}
+	var rows []map[string]json.RawMessage
+	if v, ok := raw[object]; ok {
+		if err := json.Unmarshal(v, &rows); err != nil {
+			return nil, err
+		}
+	}
+	return rows, nil
+}
+
+func flexRaw(v json.RawMessage) string {
+	var f FlexStr
+	if len(v) == 0 {
+		return ""
+	}
+	if json.Unmarshal(v, &f) == nil {
+		return strings.TrimSpace(string(f))
+	}
+	return ""
+}
+
+func (c *Client) createOrModifyObjects(ctx context.Context, object string, values []map[string]any) error {
+	if len(values) == 0 {
+		return nil
+	}
+	body := map[string]any{"object": object, "values": values}
+	data, status, err := c.postJSON(ctx, c.base+"/create_or_modify_objects.fcgi?session="+url.QueryEscape(c.Session()), body)
+	if err != nil {
+		return err
+	}
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		c.ClearSession()
+	}
+	if status < 200 || status >= 300 {
+		return fmt.Errorf("gravar %s respondeu %d: %s", object, status, strings.TrimSpace(string(data)))
+	}
+	return nil
+}
+
+func (c *Client) destroyObjects(ctx context.Context, object string, where map[string]any) error {
+	field, _ := where["field"].(string)
+	operator, _ := where["operator"].(string)
+	value := where["value"]
+	if field == "" {
+		return fmt.Errorf("filtro de %s sem campo", object)
+	}
+	condition := any(value)
+	if operator != "" && operator != "=" && operator != "==" {
+		condition = map[string]any{operator: value}
+	}
+	body := map[string]any{"object": object, "where": map[string]any{object: map[string]any{field: condition}}}
+	data, status, err := c.postJSON(ctx, c.base+"/destroy_objects.fcgi?session="+url.QueryEscape(c.Session()), body)
+	if err != nil {
+		return err
+	}
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		c.ClearSession()
+	}
+	if status < 200 || status >= 300 {
+		return fmt.Errorf("limpar %s respondeu %d: %s", object, status, strings.TrimSpace(string(data)))
+	}
+	return nil
+}
+
+func minutesSeconds(v *int) int {
+	if v == nil {
+		return 0
+	}
+	if *v < 0 {
+		return 0
+	}
+	if *v > 1439 {
+		return 86399
+	}
+	return *v * 60
+}
+
+func dayFlags(day int) map[string]int {
+	flags := map[string]int{"sun": 0, "mon": 0, "tue": 0, "wed": 0, "thu": 0, "fri": 0, "sat": 0, "hol1": 0, "hol2": 0, "hol3": 0}
+	keys := []string{"sun", "mon", "tue", "wed", "thu", "fri", "sat"}
+	if day >= 0 && day < len(keys) {
+		flags[keys[day]] = 1
+	}
+	return flags
+}
+
+// ApplySchedules publica as jornadas como time_zones + access_rules e vincula
+// cada matrícula a sua regra. É idempotente: objetos PontoPar são encontrados
+// por nome, intervalos/relações da regra são recriados e usuários sem jornada
+// ficam livres para não quebrar cadastros legados.
+func (c *Client) ApplySchedules(ctx context.Context, schedules []Schedule) error {
+	if len(schedules) == 0 {
+		return nil
+	}
+	if err := c.EnsureSession(ctx); err != nil {
+		return err
+	}
+	users, err := c.ListUsers(ctx)
+	if err != nil {
+		return err
+	}
+	byReg := make(map[string]int64, len(users))
+	for _, u := range users {
+		if u.Id > 0 && u.Registration != "" {
+			byReg[u.Registration] = u.Id
+		}
+	}
+	// O terminal é gerenciado pelo PontoPar: remove relações antigas de todos
+	// os usuários antes de reconstruir as relações desejadas. Isso também limpa
+	// a autorização de quem perdeu a escala no Thera.
+	for _, uid := range byReg {
+		if err := c.destroyObjects(ctx, "user_access_rules", map[string]any{"object": "user_access_rules", "field": "user_id", "operator": "=", "value": uid}); err != nil {
+			return err
+		}
+	}
+	tzRows, err := c.loadObjects(ctx, "time_zones", []string{"id", "name"})
+	if err != nil {
+		return err
+	}
+	ruleRows, err := c.loadObjects(ctx, "access_rules", []string{"id", "name", "type", "priority"})
+	if err != nil {
+		return err
+	}
+	portals, err := c.loadObjects(ctx, "portals", []string{"id"})
+	if err != nil {
+		return err
+	}
+	for _, schedule := range schedules {
+		if strings.TrimSpace(schedule.ScheduleID) == "" {
+			continue
+		}
+		prefix := "PontoPar:" + schedule.ScheduleID
+		tzID := findNamedID(tzRows, prefix)
+		if tzID == 0 {
+			if err := c.createOrModifyObjects(ctx, "time_zones", []map[string]any{{"name": prefix + ":timezone"}}); err != nil {
+				return err
+			}
+			tzRows, err = c.loadObjects(ctx, "time_zones", []string{"id", "name"})
+			if err != nil {
+				return err
+			}
+			tzID = findNamedID(tzRows, prefix)
+		}
+		if tzID == 0 {
+			return fmt.Errorf("time_zone da escala %s não foi criado", schedule.Name)
+		}
+		ruleID := findNamedID(ruleRows, prefix)
+		if ruleID == 0 {
+			if err := c.createOrModifyObjects(ctx, "access_rules", []map[string]any{{"name": prefix + ":rule", "type": 1, "priority": 0}}); err != nil {
+				return err
+			}
+			ruleRows, err = c.loadObjects(ctx, "access_rules", []string{"id", "name", "type", "priority"})
+			if err != nil {
+				return err
+			}
+			ruleID = findNamedID(ruleRows, prefix)
+		}
+		if ruleID == 0 {
+			return fmt.Errorf("access_rule da escala %s não foi criada", schedule.Name)
+		}
+		// Remove somente a definição desta regra gerenciada pelo PontoPar.
+		if err := c.destroyObjects(ctx, "time_spans", map[string]any{"object": "time_spans", "field": "time_zone_id", "operator": "=", "value": tzID}); err != nil {
+			return err
+		}
+		if err := c.destroyObjects(ctx, "access_rule_time_zones", map[string]any{"object": "access_rule_time_zones", "field": "access_rule_id", "operator": "=", "value": ruleID}); err != nil {
+			return err
+		}
+		spans := make([]map[string]any, 0)
+		for _, r := range schedule.Rules {
+			if r.Weekday < 0 || r.Weekday > 6 || r.Entrada == nil {
+				continue
+			}
+			start := minutesSeconds(r.Entrada)
+			end := minutesSeconds(r.Saida)
+			if r.Saida == nil {
+				end = 86399
+			}
+			if end > start {
+				span := map[string]any{"time_zone_id": tzID, "start": start, "end": end}
+				for k, v := range dayFlags(r.Weekday) {
+					span[k] = v
+				}
+				spans = append(spans, span)
+			} else if r.Saida != nil {
+				span := map[string]any{"time_zone_id": tzID, "start": start, "end": 86399}
+				for k, v := range dayFlags(r.Weekday) {
+					span[k] = v
+				}
+				spans = append(spans, span)
+				next := (r.Weekday + 1) % 7
+				span = map[string]any{"time_zone_id": tzID, "start": 0, "end": end}
+				for k, v := range dayFlags(next) {
+					span[k] = v
+				}
+				spans = append(spans, span)
+			}
+		}
+		if err := c.createOrModifyObjects(ctx, "time_spans", spans); err != nil {
+			return err
+		}
+		if err := c.createOrModifyObjects(ctx, "access_rule_time_zones", []map[string]any{{"access_rule_id": ruleID, "time_zone_id": tzID}}); err != nil {
+			return err
+		}
+		for _, registration := range schedule.EmployeeRegistrations {
+			uid := byReg[strings.TrimSpace(registration)]
+			if uid == 0 {
+				continue
+			}
+			if err := c.createOrModifyObjects(ctx, "user_access_rules", []map[string]any{{"user_id": uid, "access_rule_id": ruleID}}); err != nil {
+				return err
+			}
+		}
+		// O iDFace exige que a regra esteja associada ao portal para efetivar a
+		// liberação. Se o firmware não expõe portais, as demais etapas continuam
+		// úteis para o modo de contingência.
+		if err := c.destroyObjects(ctx, "portal_access_rules", map[string]any{"object": "portal_access_rules", "field": "access_rule_id", "operator": "=", "value": ruleID}); err != nil {
+			return err
+		}
+		for _, portal := range portals {
+			pid := flexRaw(portal["id"])
+			if pid == "" {
+				continue
+			}
+			portalID, parseErr := strconv.ParseInt(pid, 10, 64)
+			if parseErr != nil || portalID <= 0 {
+				continue
+			}
+			if err := c.createOrModifyObjects(ctx, "portal_access_rules", []map[string]any{{"portal_id": portalID, "access_rule_id": ruleID}}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func findNamedID(rows []map[string]json.RawMessage, prefix string) int64 {
+	for _, row := range rows {
+		name := flexRaw(row["name"])
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		id, err := strconv.ParseInt(flexRaw(row["id"]), 10, 64)
+		if err == nil && id > 0 {
+			return id
+		}
+	}
+	return 0
 }
 
 // LoadNewAccessLogs busca as batidas novas: event=7 e id > cursor, ordenadas
