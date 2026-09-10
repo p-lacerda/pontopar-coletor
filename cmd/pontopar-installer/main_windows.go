@@ -450,6 +450,12 @@ func loadInitialConfig() (installerConfig, error) {
 		return installerConfig{}, fmt.Errorf("configuração salva inválida: %w", err)
 	}
 	normalizeConfig(&saved)
+	// Instalações MRV antigas foram gravadas com o placeholder 0. O payload
+	// oficial já traz o device_id real; migra somente o placeholder, preservando
+	// qualquer ID que o operador tenha informado manualmente.
+	if strings.TrimSpace(saved.DeviceID) == "" || strings.TrimSpace(saved.DeviceID) == "0" {
+		saved.DeviceID = defaults.DeviceID
+	}
 	return saved, nil
 }
 

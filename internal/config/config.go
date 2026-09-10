@@ -73,8 +73,8 @@ type Config struct {
 // antes de iniciar o serviço. Isso permite abrir o programa recém-baixado sem
 // depender de um config.json externo.
 func Default() *Config {
-	return &Config{DevicePort: 80, Login: "admin", PollSeconds: 15,
-		TheraBase: "https://xi6vuuvift.us-east-1.awsapprunner.com",
+	return &Config{DeviceIp: "192.168.1.111", DevicePort: 90, Login: "admin", DeviceId: flexInt64(4409419584542362), PollSeconds: 15,
+		TheraBase: "https://pediuai-api.debita.ai/thera",
 		Update:    UpdateConfig{Repo: "p-lacerda/pontopar-coletor", CheckHours: 6}}
 }
 

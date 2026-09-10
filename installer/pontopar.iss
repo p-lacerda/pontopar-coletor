@@ -89,7 +89,9 @@ begin
   Value := ReadJsonValue(Text, 'devicePort'); if Value <> '' then DevicePage.Values[1] := Value;
   Value := ReadJsonValue(Text, 'login'); if Value <> '' then DevicePage.Values[2] := Value;
   Value := ReadJsonValue(Text, 'password'); if Value <> '' then DevicePage.Values[3] := Value;
-  Value := ReadJsonValue(Text, 'deviceId'); if Value <> '' then DevicePage.Values[4] := Value;
+  Value := ReadJsonValue(Text, 'deviceId');
+  { Migra instalações antigas que gravaram o placeholder 0 para o ID real padrão. }
+  if (Value <> '') and (Trim(Value) <> '0') then DevicePage.Values[4] := Value;
   Value := ReadJsonValue(Text, 'theraBase'); if Value <> '' then TheraPage.Values[0] := Value;
   Value := ReadJsonValue(Text, 'deviceSecret'); if Value <> '' then TheraPage.Values[1] := Value;
   Value := ReadJsonValue(Text, 'pollSeconds'); if Value <> '' then TheraPage.Values[2] := Value;
@@ -114,11 +116,11 @@ begin
   DevicePage.Add('Porta web:', False);
   DevicePage.Add('Usuário:', False);
   DevicePage.Add('Senha:', True);
-  DevicePage.Add('ID do aparelho no Thera (0 = automático):', False);
-  DevicePage.Values[0] := '192.168.0.140';
-  DevicePage.Values[1] := '80';
+  DevicePage.Add('ID do aparelho no Thera (obrigatório):', False);
+  DevicePage.Values[0] := '192.168.1.111';
+  DevicePage.Values[1] := '90';
   DevicePage.Values[2] := 'admin';
-  DevicePage.Values[4] := '0';
+  DevicePage.Values[4] := '4409419584542362';
 
   TheraPage := CreateInputQueryPage(DevicePage.ID,
     'Conexão com o Thera',
@@ -127,7 +129,7 @@ begin
   TheraPage.Add('Endereço do Thera:', False);
   TheraPage.Add('Segredo do Thera:', True);
   TheraPage.Add('Intervalo de coleta (segundos):', False);
-  TheraPage.Values[0] := 'https://xi6vuuvift.us-east-1.awsapprunner.com';
+  TheraPage.Values[0] := 'https://pediuai-api.debita.ai/thera';
   TheraPage.Values[2] := '15';
   LoadExistingConfig;
 end;
@@ -139,6 +141,14 @@ begin
   Result := (Parsed >= MinValue) and (Parsed <= MaxValue);
 end;
 
+function IsPositiveInt64(Value: String): Boolean;
+var Parsed: Int64;
+begin
+  { device_id do Control iD pode ser maior que 32 bits (ex.: 4409419584542362). }
+  Parsed := StrToInt64Def(Trim(Value), -1);
+  Result := Parsed > 0;
+end;
+
 function NextButtonClick(CurPageID: Integer): Boolean;
 begin
   Result := True;
@@ -146,7 +156,7 @@ begin
     if Trim(DevicePage.Values[0]) = '' then begin MsgBox('Informe o IP do Control iD.', mbError, MB_OK); Result := False; exit; end;
     if not IsIntegerInRange(DevicePage.Values[1], 1, 65535) then begin MsgBox('A porta deve ser um número entre 1 e 65535.', mbError, MB_OK); Result := False; exit; end;
     if Trim(DevicePage.Values[2]) = '' then begin MsgBox('Informe o usuário do Control iD.', mbError, MB_OK); Result := False; exit; end;
-    if not IsIntegerInRange(DevicePage.Values[4], 0, 2147483647) then begin MsgBox('O ID do aparelho deve ser zero ou um número positivo.', mbError, MB_OK); Result := False; exit; end;
+    if not IsPositiveInt64(DevicePage.Values[4]) then begin MsgBox('Informe o ID do aparelho no Thera (número inteiro positivo).', mbError, MB_OK); Result := False; exit; end;
   end;
   if CurPageID = TheraPage.ID then begin
     if Trim(TheraPage.Values[0]) = '' then begin MsgBox('Informe o endereço do Thera.', mbError, MB_OK); Result := False; exit; end;

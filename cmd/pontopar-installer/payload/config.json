@@ -1,10 +1,10 @@
 {
-  "deviceIp": "192.168.0.140",
-  "devicePort": 80,
+  "deviceIp": "192.168.1.111",
+  "devicePort": 90,
   "login": "admin",
   "password": "admin",
-  "deviceId": "",
-  "theraBase": "https://xi6vuuvift.us-east-1.awsapprunner.com",
+  "deviceId": "4409419584542362",
+  "theraBase": "https://pediuai-api.debita.ai/thera",
   "deviceSecret": "",
   "pollSeconds": 15,
   "update": {
