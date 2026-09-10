@@ -45,8 +45,8 @@ Filename: "{app}\pontopar-coletor.exe"; Parameters: "install-start"; StatusMsg: 
 Filename: "{app}\pontopar-coletor.exe"; Description: "Abrir PontoPar Coletor"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-Filename: "{app}\pontopar-coletor.exe"; Parameters: "stop"; Flags: runhidden waituntilterminated ignoreerrors; RunOnceId: "StopService"
-Filename: "{app}\pontopar-coletor.exe"; Parameters: "uninstall"; Flags: runhidden waituntilterminated ignoreerrors; RunOnceId: "RemoveService"
+Filename: "{app}\pontopar-coletor.exe"; Parameters: "stop"; Flags: runhidden waituntilterminated; RunOnceId: "StopService"
+Filename: "{app}\pontopar-coletor.exe"; Parameters: "uninstall"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveService"
 
 [Code]
 var
