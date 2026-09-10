@@ -75,6 +75,8 @@ type SyncManifest struct {
 type SyncObservation struct {
 	UserID       string `json:"userId"`
 	Registration string `json:"registration"`
+	Name         string `json:"name"`
+	Enabled      bool   `json:"enabled"`
 	FaceEnrolled bool   `json:"faceEnrolled"`
 }
 

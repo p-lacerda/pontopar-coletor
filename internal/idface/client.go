@@ -113,6 +113,7 @@ type UserSnapshot struct {
 	Name            string
 	BeginTime       int64
 	EndTime         int64
+	Enabled         bool
 	ImageRegistered bool
 }
 
@@ -432,7 +433,8 @@ func (c *Client) ListUsers(ctx context.Context) ([]UserSnapshot, error) {
 			continue
 		}
 		_, has := images[id]
-		result = append(result, UserSnapshot{Id: id, Registration: strings.TrimSpace(string(u.Registration)), Name: u.Name, BeginTime: u.BeginTime, EndTime: u.EndTime, ImageRegistered: has})
+		enabled := u.EndTime == 0 || u.EndTime > time.Now().Unix()
+		result = append(result, UserSnapshot{Id: id, Registration: strings.TrimSpace(string(u.Registration)), Name: u.Name, BeginTime: u.BeginTime, EndTime: u.EndTime, Enabled: enabled, ImageRegistered: has})
 	}
 	return result, nil
 }

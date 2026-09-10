@@ -162,6 +162,22 @@ func (c *Collector) syncUsers(ctx context.Context) error {
 	if manifest.DeviceID != "" && c.cfg.DeviceIdInt() != 0 && manifest.DeviceID != itoa(c.cfg.DeviceIdInt()) {
 		return fmt.Errorf("manifesto é do device %s, configurado %s", manifest.DeviceID, itoa(c.cfg.DeviceIdInt()))
 	}
+	// Lê o aparelho ANTES de aplicar o manifesto. O servidor compara esta
+	// observação com a última registrada e reconhece mudanças feitas diretamente
+	// no Control iD (nome/ativação) sem confundi-las com o primeiro sync.
+	before, err := c.device.ListUsers(ctx)
+	if err != nil {
+		return err
+	}
+	if err := c.thera.PostSyncResult(ctx, syncObservations(before)); err != nil {
+		return err
+	}
+	// Uma alteração observada no aparelho pode ter atualizado o Thera; recarrega
+	// o manifesto para aplicar o estado resultante no mesmo ciclo.
+	manifest, err = c.thera.GetSync(ctx)
+	if err != nil {
+		return err
+	}
 	users := make([]idface.User, 0, len(manifest.Users))
 	for _, wanted := range manifest.Users {
 		image, err := c.thera.GetBinary(ctx, wanted.FaceURL)
@@ -192,13 +208,21 @@ func (c *Collector) syncUsers(ctx context.Context) error {
 				return fmt.Errorf("enviar face matrícula %s: %w", user.Registration, faceErr)
 			}
 		}
-		result = append(result, thera.SyncObservation{UserID: itoa(user.Id), Registration: user.Registration, FaceEnrolled: user.ImageRegistered})
+		result = append(result, thera.SyncObservation{UserID: itoa(user.Id), Registration: user.Registration, Name: user.Name, Enabled: user.Enabled, FaceEnrolled: user.ImageRegistered})
 	}
 	if err := c.thera.PostSyncResult(ctx, result); err != nil {
 		return err
 	}
 	c.log.Infof("sincronização concluída: %d usuários observados", len(result))
 	return nil
+}
+
+func syncObservations(users []idface.UserSnapshot) []thera.SyncObservation {
+	result := make([]thera.SyncObservation, 0, len(users))
+	for _, user := range users {
+		result = append(result, thera.SyncObservation{UserID: itoa(user.Id), Registration: user.Registration, Name: user.Name, Enabled: user.Enabled, FaceEnrolled: user.ImageRegistered})
+	}
+	return result
 }
 
 // drainOnce processa UM lote: busca as próximas batidas (id > cursor), traduz
