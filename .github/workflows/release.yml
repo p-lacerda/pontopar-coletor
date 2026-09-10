@@ -58,7 +58,11 @@ jobs:
           $CompilerOutput = & $Iscc "/DMyAppVersion=$env:VERSION" "/DSourceExe=$pwd\dist\$env:ASSET" "/DSetupOutputBase=$SetupBase" "installer\pontopar.iss" 2>&1
           $CompilerOutput | ForEach-Object { Write-Host $_ }
           @("## Inno Setup compiler", "```text") + $CompilerOutput + "```" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          if ($LASTEXITCODE -ne 0) { throw "Inno Setup falhou com código $LASTEXITCODE" }
+          if ($LASTEXITCODE -ne 0) {
+            $Message = ($CompilerOutput -join ' | ') -replace '%','%25' -replace "`r",'%0D' -replace "`n",'%0A'
+            Write-Host "::error title=Inno Setup compiler::$Message"
+            exit 1
+          }
 
       - name: Generate checksums.txt
         shell: pwsh
