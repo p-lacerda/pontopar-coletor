@@ -80,9 +80,11 @@ end;
 
 procedure LoadExistingConfig;
 var
+  RawText: AnsiString;
   Text, Value: String;
 begin
-  if not LoadStringFromFile(ExpandConstant('{commonappdata}\PontoParColetor\config.json'), Text) then exit;
+  if not LoadStringFromFile(ExpandConstant('{commonappdata}\PontoParColetor\config.json'), RawText) then exit;
+  Text := String(RawText);
   Value := ReadJsonValue(Text, 'deviceIp'); if Value <> '' then DevicePage.Values[0] := Value;
   Value := ReadJsonValue(Text, 'devicePort'); if Value <> '' then DevicePage.Values[1] := Value;
   Value := ReadJsonValue(Text, 'login'); if Value <> '' then DevicePage.Values[2] := Value;
