@@ -71,6 +71,14 @@ type SyncUser struct {
 type SyncManifest struct {
 	DeviceID string     `json:"deviceId"`
 	Users    []SyncUser `json:"users"`
+	// Configuração pendente/desired do terminal. Pequena e idempotente: não é
+	// fila em memória; o coletor lê do servidor a cada sincronização.
+	Configuration *DeviceConfiguration `json:"configuration,omitempty"`
+}
+type DeviceConfiguration struct {
+	EnablePhotoUpload  bool `json:"enablePhotoUpload"`
+	LivenessMode       bool `json:"livenessMode"`
+	LimitDisplayRegion bool `json:"limitDisplayRegion"`
 }
 type SyncObservation struct {
 	UserID       string `json:"userId"`

@@ -162,6 +162,11 @@ func (c *Collector) syncUsers(ctx context.Context) error {
 	if manifest.DeviceID != "" && c.cfg.DeviceIdInt() != 0 && manifest.DeviceID != itoa(c.cfg.DeviceIdInt()) {
 		return fmt.Errorf("manifesto é do device %s, configurado %s", manifest.DeviceID, itoa(c.cfg.DeviceIdInt()))
 	}
+	if manifest.Configuration != nil {
+		if err := c.device.SetFacialConfiguration(ctx, manifest.Configuration.EnablePhotoUpload, manifest.Configuration.LivenessMode, manifest.Configuration.LimitDisplayRegion); err != nil {
+			return fmt.Errorf("aplicar configuração facial: %w", err)
+		}
+	}
 	// Lê o aparelho ANTES de aplicar o manifesto. O servidor compara esta
 	// observação com a última registrada e reconhece mudanças feitas diretamente
 	// no Control iD (nome/ativação) sem confundi-las com o primeiro sync.

@@ -244,6 +244,27 @@ func (c *Client) EnsureSession(ctx context.Context) error {
 	return c.Login(ctx)
 }
 
+// SetFacialConfiguration aplica configurações idempotentes do iDFace. O
+// servidor só envia esse pequeno objeto no manifesto; nada fica acumulado no
+// processo do coletor.
+func (c *Client) SetFacialConfiguration(ctx context.Context, enablePhotoUpload, livenessMode, limitDisplayRegion bool) error {
+	toFlag := func(v bool) string {
+		if v {
+			return "1"
+		}
+		return "0"
+	}
+	body := map[string]any{"monitor": map[string]string{"enable_photo_upload": toFlag(enablePhotoUpload)}, "face_id": map[string]string{"liveness_mode": toFlag(livenessMode), "limit_identification_to_display_region": toFlag(limitDisplayRegion)}}
+	_, status, err := c.postJSON(ctx, c.base+"/set_configuration.fcgi?session="+url.QueryEscape(c.Session()), body)
+	if err != nil {
+		return err
+	}
+	if status < 200 || status >= 300 {
+		return fmt.Errorf("set_configuration respondeu %d", status)
+	}
+	return nil
+}
+
 // LoadNewAccessLogs busca as batidas novas: event=7 e id > cursor, ordenadas
 // por id, limite AccessLogsBatchLimit. Espelha fetchNewLogs do Node.
 //
