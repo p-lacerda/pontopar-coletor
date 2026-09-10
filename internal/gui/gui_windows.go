@@ -92,7 +92,7 @@ func Run(version string) error {
 	if err != nil {
 		return err
 	}
-	deviceID, err := addLine(form, "ID do aparelho no Thera", strconv.FormatInt(cfg.DeviceIdInt(), 10), false, false)
+	deviceID, err := addLine(form, "ID do aparelho no Thera (obrigatório)", strconv.FormatInt(cfg.DeviceIdInt(), 10), false, false)
 	if err != nil {
 		return err
 	}

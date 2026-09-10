@@ -240,7 +240,7 @@ func showSettings(owner *walk.MainWindow, current installerConfig) (installerCon
 	if err != nil {
 		return current, false, err
 	}
-	deviceID, err := addSettingsLine(form, "ID do aparelho no Thera (pode deixar 0)", current.DeviceID, false, false)
+	deviceID, err := addSettingsLine(form, "ID do aparelho no Thera (obrigatório)", current.DeviceID, false, false)
 	if err != nil {
 		return current, false, err
 	}
@@ -500,6 +500,12 @@ func (c installerConfig) validate() error {
 	}
 	if strings.TrimSpace(c.DeviceSecret) == "" {
 		missing = append(missing, "segredo do Thera")
+	}
+	deviceID := strings.TrimSpace(c.DeviceID)
+	if deviceID == "" {
+		missing = append(missing, "ID do aparelho no Thera")
+	} else if n, err := strconv.ParseInt(deviceID, 10, 64); err != nil || n <= 0 {
+		return fmt.Errorf("ID do aparelho no Thera deve ser um número inteiro positivo (ex.: 4409419584542362)")
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("faltam: %s", strings.Join(missing, ", "))
