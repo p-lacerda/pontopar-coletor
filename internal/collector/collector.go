@@ -163,7 +163,7 @@ func (c *Collector) syncUsers(ctx context.Context) error {
 		return fmt.Errorf("manifesto é do device %s, configurado %s", manifest.DeviceID, itoa(c.cfg.DeviceIdInt()))
 	}
 	if manifest.Configuration != nil {
-		if err := c.device.SetFacialConfiguration(ctx, manifest.Configuration.EnablePhotoUpload, manifest.Configuration.LivenessMode, manifest.Configuration.LimitDisplayRegion); err != nil {
+		if err := c.device.SetFacialConfiguration(ctx, manifest.Configuration.EnablePhotoUpload, manifest.Configuration.LivenessMode, manifest.Configuration.LimitDisplayRegion, manifest.Configuration.IdentificationDistanceCm); err != nil {
 			return fmt.Errorf("aplicar configuração facial: %w", err)
 		}
 	}

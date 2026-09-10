@@ -247,14 +247,19 @@ func (c *Client) EnsureSession(ctx context.Context) error {
 // SetFacialConfiguration aplica configurações idempotentes do iDFace. O
 // servidor só envia esse pequeno objeto no manifesto; nada fica acumulado no
 // processo do coletor.
-func (c *Client) SetFacialConfiguration(ctx context.Context, enablePhotoUpload, livenessMode, limitDisplayRegion bool) error {
+func (c *Client) SetFacialConfiguration(ctx context.Context, enablePhotoUpload, livenessMode, limitDisplayRegion bool, identificationDistanceCm float64) error {
 	toFlag := func(v bool) string {
 		if v {
 			return "1"
 		}
 		return "0"
 	}
-	body := map[string]any{"monitor": map[string]string{"enable_photo_upload": toFlag(enablePhotoUpload)}, "face_id": map[string]string{"liveness_mode": toFlag(livenessMode), "limit_identification_to_display_region": toFlag(limitDisplayRegion)}}
+	face := map[string]string{"liveness_mode": toFlag(livenessMode), "limit_identification_to_display_region": toFlag(limitDisplayRegion)}
+	if identificationDistanceCm >= 30 && identificationDistanceCm <= 200 {
+		// O firmware recebe min_detect_bounds_width, não centímetros.
+		face["min_detect_bounds_width"] = strconv.FormatFloat(11.6/identificationDistanceCm, 'f', 2, 64)
+	}
+	body := map[string]any{"monitor": map[string]string{"enable_photo_upload": toFlag(enablePhotoUpload)}, "face_id": face}
 	_, status, err := c.postJSON(ctx, c.base+"/set_configuration.fcgi?session="+url.QueryEscape(c.Session()), body)
 	if err != nil {
 		return err
