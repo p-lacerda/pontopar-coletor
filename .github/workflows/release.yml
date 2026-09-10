@@ -49,11 +49,21 @@ jobs:
           "VERSION=$VERSION" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Build standard Windows installer
-        uses: Minionguyjpro/Inno-Setup-Action@v1.2.9
-        with:
-          path: installer/pontopar.iss
-          install_latest: true
-          options: /DMyAppVersion=${{ env.VERSION }} /DSourceExe=${{ github.workspace }}\dist\${{ env.ASSET }} /DSetupOutputBase=PontoPar-Setup_${{ env.VERSION }}_windows_amd64
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+          choco install innosetup --no-progress -y
+          $Iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          $SetupBase = $env:SETUP_ASSET -replace '\.exe$',''
+          $CompilerOutput = & $Iscc "/DMyAppVersion=$env:VERSION" "/DSourceExe=$pwd\dist\$env:ASSET" "/DSetupOutputBase=$SetupBase" "installer\pontopar.iss" 2>&1
+          $ExitCode = $LASTEXITCODE
+          $CompilerOutput | ForEach-Object { Write-Host $_ }
+          if ($ExitCode -ne 0) {
+            $Message = ($CompilerOutput -join ' | ') -replace '%','%25' -replace "`r",'%0D' -replace "`n",'%0A'
+            Write-Host "::error title=Inno Setup compiler::$Message"
+            exit $ExitCode
+          }
 
       - name: Generate checksums.txt
         shell: pwsh
