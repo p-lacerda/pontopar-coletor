@@ -53,7 +53,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           choco install innosetup --no-progress -y
-          $Iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          $Iscc = (Get-Command ISCC.exe -ErrorAction Stop).Source
           $SetupBase = $env:SETUP_ASSET -replace '\.exe$',''
           $CompilerOutput = & $Iscc "/DMyAppVersion=$env:VERSION" "/DSourceExe=$pwd\dist\$env:ASSET" "/DSetupOutputBase=$SetupBase" "installer\pontopar.iss" 2>&1
           $CompilerOutput | ForEach-Object { Write-Host $_ }
