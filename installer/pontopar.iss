@@ -135,7 +135,8 @@ end;
 function IsIntegerInRange(Value: String; MinValue, MaxValue: Integer): Boolean;
 var Parsed: Integer;
 begin
-  Result := TryStrToInt(Trim(Value), Parsed) and (Parsed >= MinValue) and (Parsed <= MaxValue);
+  Parsed := StrToIntDef(Trim(Value), MinValue - 1);
+  Result := (Parsed >= MinValue) and (Parsed <= MaxValue);
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
