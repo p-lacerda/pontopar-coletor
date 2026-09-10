@@ -259,7 +259,16 @@ func (c *Client) SetFacialConfiguration(ctx context.Context, enablePhotoUpload, 
 		// O firmware recebe min_detect_bounds_width, não centímetros.
 		face["min_detect_bounds_width"] = strconv.FormatFloat(11.6/identificationDistanceCm, 'f', 2, 64)
 	}
-	body := map[string]any{"monitor": map[string]string{"enable_photo_upload": toFlag(enablePhotoUpload)}, "face_id": face}
+	// Este terminal é usado como relógio de ponto, não como controlador de
+	// porta. No modo ponto o firmware registra a identificação de qualquer
+	// usuário cadastrado e não aplica access_rules/time_zones, que eram a causa
+	// do aviso "não autorizado" quando só a escala do Thera existia.
+	body := map[string]any{
+		"general":    map[string]string{"attendance_mode": "1"},
+		"identifier": map[string]string{"log_type": "0"},
+		"monitor":    map[string]string{"enable_photo_upload": toFlag(enablePhotoUpload)},
+		"face_id":    face,
+	}
 	_, status, err := c.postJSON(ctx, c.base+"/set_configuration.fcgi?session="+url.QueryEscape(c.Session()), body)
 	if err != nil {
 		return err
