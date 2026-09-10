@@ -214,6 +214,7 @@ func (c *Collector) syncUsers(ctx context.Context) error {
 		if err := c.device.ApplySchedules(ctx, schedules); err != nil {
 			return fmt.Errorf("aplicar escalas: %w", err)
 		}
+		c.log.Infof("escalas sincronizadas no Control iD: %d", len(schedules))
 	}
 	// Só muda o terminal para standalone DEPOIS que todas as regras foram
 	// publicadas. Assim uma falha intermediária nunca deixa o relógio em modo
