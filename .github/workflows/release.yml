@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   build-release:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,42 +27,49 @@ jobs:
           go-version: "1.25"
           check-latest: true
 
-      - name: Build (windows/amd64)
-        env:
-          GOOS: windows
-          GOARCH: amd64
-          CGO_ENABLED: "0"
+      - name: Build collector (windows/amd64)
+        shell: pwsh
         run: |
-          set -euo pipefail
-          VERSION="${GITHUB_REF_NAME}"
+          $ErrorActionPreference = "Stop"
+          $env:GOOS = "windows"
+          $env:GOARCH = "amd64"
+          $env:CGO_ENABLED = "0"
+          $VERSION = "${{ github.ref_name }}"
           # Nome do asset DEVE casar o regex de OS/arch do go-selfupdate:
           #   {cmd}([_-]v?SEMVER)?([_-]{os}[_-]{arch})?(\.exe)?
           # onde {cmd} == "pontopar-coletor" (nome do exe instalado no cliente).
-          ASSET="pontopar-coletor_${VERSION}_windows_amd64.exe"
-          SETUP_ASSET="PontoPar-Setup_${VERSION}_windows_amd64.exe"
-          mkdir -p dist
+          $ASSET = "pontopar-coletor_${VERSION}_windows_amd64.exe"
+          $SETUP_ASSET = "PontoPar-Setup_${VERSION}_windows_amd64.exe"
+          New-Item -ItemType Directory -Force dist | Out-Null
           # -H windowsgui evita abrir uma janela de terminal quando o usuário
           # dá dois cliques no programa; a interface e a bandeja são nativas.
-          go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=${VERSION}" \
-            -o "dist/${ASSET}" ./cmd/pontopar-coletor
-          # O instalador é outro .exe: ele embute o coletor acima. A configuração
-          # que vai ao GitHub é apenas o modelo sem segredos; o assistente pede os
-          # campos necessários na instalação.
-          cp "dist/${ASSET}" cmd/pontopar-installer/payload/pontopar-coletor.exe
-          go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=${VERSION}" \
-            -o "dist/${SETUP_ASSET}" ./cmd/pontopar-installer
-          echo "ASSET=${ASSET}" >> "$GITHUB_ENV"
-          echo "SETUP_ASSET=${SETUP_ASSET}" >> "$GITHUB_ENV"
+          go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=$VERSION" -o "dist/$ASSET" ./cmd/pontopar-coletor
+          "ASSET=$ASSET" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "SETUP_ASSET=$SETUP_ASSET" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "VERSION=$VERSION" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Build standard Windows installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          choco install innosetup --no-progress -y
+          $Iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          $SetupBase = $env:SETUP_ASSET -replace '\.exe$',''
+          & $Iscc "/DMyAppVersion=$env:VERSION" "/DSourceExe=$pwd\dist\$env:ASSET" "/DSetupOutputBase=$SetupBase" "installer\pontopar.iss"
 
       - name: Generate checksums.txt
+        shell: pwsh
         run: |
-          set -euo pipefail
-          cd dist
-          # Uma linha por arquivo: "<sha256>  <nome-do-arquivo>" (formato sha256sum).
-          # O nome DEVE bater exatamente com o do asset publicado.
-          sha256sum "${ASSET}" "${SETUP_ASSET}" > checksums.txt
-          echo "----- checksums.txt -----"
-          cat checksums.txt
+          $ErrorActionPreference = "Stop"
+          Push-Location dist
+          $Lines = @()
+          foreach ($File in @($env:ASSET, $env:SETUP_ASSET)) {
+            $Hash = (Get-FileHash -Algorithm SHA256 $File).Hash.ToLower()
+            $Lines += "$Hash  $File"
+          }
+          $Lines | Set-Content -Encoding ascii checksums.txt
+          Get-Content checksums.txt
+          Pop-Location
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

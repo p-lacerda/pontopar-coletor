@@ -58,7 +58,7 @@ func Run(version string) error {
 	if err := mw.SetLayout(walk.NewVBoxLayout()); err != nil {
 		return err
 	}
-	if err := mw.SetSize(walk.Size{Width: 610, Height: 510}); err != nil {
+	if err := mw.SetSize(walk.Size{Width: 680, Height: 590}); err != nil {
 		return err
 	}
 
@@ -100,7 +100,12 @@ func Run(version string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := addLine(form, "Endereço do Thera", cfg.TheraBase, false, true); err != nil {
+	theraBase, err := addLine(form, "Endereço do Thera", cfg.TheraBase, false, false)
+	if err != nil {
+		return err
+	}
+	secret, err := addLine(form, "Segredo do Thera", cfg.DeviceSecret, true, false)
+	if err != nil {
 		return err
 	}
 	if _, err := addLine(form, "Atualizações", cfg.Update.Repo, false, true); err != nil {
@@ -157,6 +162,8 @@ func Run(version string) error {
 		updated.DeviceIp = strings.TrimSpace(ip.Text())
 		updated.Login = strings.TrimSpace(login.Text())
 		updated.Password = password.Text()
+		updated.TheraBase = strings.TrimSpace(theraBase.Text())
+		updated.DeviceSecret = strings.TrimSpace(secret.Text())
 
 		parsedPort, err := positiveInt(port.Text(), "porta web", 1, 65535)
 		if err != nil {
