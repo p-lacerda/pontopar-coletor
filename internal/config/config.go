@@ -27,6 +27,16 @@ type UpdateConfig struct {
 	Token string `json:"token"`
 }
 
+// FacialConfig controla os parâmetros que o coletor aplica no iDFace quando
+// recebe o manifesto do Thera. Os valores ficam no config local para também
+// poderem ser ajustados pelo instalador sem manter fila em memória.
+type FacialConfig struct {
+	EnablePhotoUpload        bool    `json:"enablePhotoUpload"`
+	LivenessMode             bool    `json:"livenessMode"`
+	LimitDisplayRegion       bool    `json:"limitDisplayRegion"`
+	IdentificationDistanceCm float64 `json:"identificationDistanceCm"`
+}
+
 // flexInt64 aceita, no JSON, tanto número quanto string (o config.json de
 // referência tinha "deviceId": "" — string vazia). Guarda sempre como int64.
 type flexInt64 int64
@@ -66,6 +76,7 @@ type Config struct {
 	TheraBase    string       `json:"theraBase"`
 	PollSeconds  int          `json:"pollSeconds"` // default 15
 	Update       UpdateConfig `json:"update"`
+	Facial       FacialConfig `json:"facial"`
 }
 
 // Default devolve uma configuração inicial segura para a interface. Ela não
@@ -75,6 +86,7 @@ type Config struct {
 func Default() *Config {
 	return &Config{DeviceIp: "192.168.1.111", DevicePort: 90, Login: "admin", DeviceId: flexInt64(4409419584542362), PollSeconds: 15,
 		TheraBase: "https://pediuai-api.debita.ai/thera",
+		Facial:    FacialConfig{EnablePhotoUpload: true, LivenessMode: true, LimitDisplayRegion: true, IdentificationDistanceCm: 50},
 		Update:    UpdateConfig{Repo: "p-lacerda/pontopar-coletor", CheckHours: 6}}
 }
 
@@ -149,6 +161,9 @@ func Load(dir string) (*Config, error) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return nil, fmt.Errorf("config.json invalido (%s): %w", p, err)
 	}
+	if c.Facial.IdentificationDistanceCm == 0 {
+		c.Facial = Default().Facial
+	}
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
@@ -220,6 +235,9 @@ func (c *Config) Validate() error {
 	}
 	if strings.TrimSpace(c.DeviceSecret) == "" {
 		missing = append(missing, "deviceSecret")
+	}
+	if c.Facial.IdentificationDistanceCm != 0 && (c.Facial.IdentificationDistanceCm < 30 || c.Facial.IdentificationDistanceCm > 200) {
+		return fmt.Errorf("identificationDistanceCm deve estar entre 30 e 200 cm")
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("config.json incompleto, faltam campos: %s", strings.Join(missing, ", "))

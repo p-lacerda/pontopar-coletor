@@ -58,7 +58,7 @@ func Run(version string) error {
 	if err := mw.SetLayout(walk.NewVBoxLayout()); err != nil {
 		return err
 	}
-	if err := mw.SetSize(walk.Size{Width: 680, Height: 590}); err != nil {
+	if err := mw.SetSize(walk.Size{Width: 680, Height: 760}); err != nil {
 		return err
 	}
 
@@ -105,6 +105,22 @@ func Run(version string) error {
 		return err
 	}
 	secret, err := addLine(form, "Segredo do Thera", cfg.DeviceSecret, true, false)
+	if err != nil {
+		return err
+	}
+	distance, err := addLine(form, "Distância da face (cm)", strconv.FormatFloat(defaultDistance(cfg.Facial.IdentificationDistanceCm), 'f', 0, 64), false, false)
+	if err != nil {
+		return err
+	}
+	liveness, err := addLine(form, "Liveness rigoroso (1/0)", boolText(cfg.Facial.LivenessMode), false, false)
+	if err != nil {
+		return err
+	}
+	region, err := addLine(form, "Limitar à região da tela (1/0)", boolText(cfg.Facial.LimitDisplayRegion), false, false)
+	if err != nil {
+		return err
+	}
+	photo, err := addLine(form, "Enviar foto da batida (1/0)", boolText(cfg.Facial.EnablePhotoUpload), false, false)
 	if err != nil {
 		return err
 	}
@@ -164,6 +180,19 @@ func Run(version string) error {
 		updated.Password = password.Text()
 		updated.TheraBase = strings.TrimSpace(theraBase.Text())
 		updated.DeviceSecret = strings.TrimSpace(secret.Text())
+		updated.Facial.IdentificationDistanceCm, err = parseDistance(distance.Text())
+		if err != nil {
+			return nil, err
+		}
+		if updated.Facial.LivenessMode, err = parseBoolFlag(liveness.Text(), "liveness"); err != nil {
+			return nil, err
+		}
+		if updated.Facial.LimitDisplayRegion, err = parseBoolFlag(region.Text(), "região da tela"); err != nil {
+			return nil, err
+		}
+		if updated.Facial.EnablePhotoUpload, err = parseBoolFlag(photo.Text(), "foto da batida"); err != nil {
+			return nil, err
+		}
 
 		parsedPort, err := positiveInt(port.Text(), "porta web", 1, 65535)
 		if err != nil {
@@ -328,6 +357,35 @@ func addLine(parent walk.Container, label, value string, password, readOnly bool
 		return nil, err
 	}
 	return field, nil
+}
+
+func defaultDistance(v float64) float64 {
+	if v < 30 || v > 200 {
+		return 50
+	}
+	return v
+}
+func boolText(v bool) string {
+	if v {
+		return "1"
+	}
+	return "0"
+}
+func parseDistance(raw string) (float64, error) {
+	v, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil || v < 30 || v > 200 {
+		return 0, fmt.Errorf("distância da face deve estar entre 30 e 200 cm")
+	}
+	return v, nil
+}
+func parseBoolFlag(raw, name string) (bool, error) {
+	switch strings.TrimSpace(raw) {
+	case "1":
+		return true, nil
+	case "0":
+		return false, nil
+	}
+	return false, fmt.Errorf("%s deve ser 1 ou 0", name)
 }
 
 func positiveInt(raw, name string, min, max int) (int, error) {

@@ -52,6 +52,7 @@ Filename: "{app}\pontopar-coletor.exe"; Parameters: "uninstall"; Flags: runhidde
 var
   DevicePage: TInputQueryWizardPage;
   TheraPage: TInputQueryWizardPage;
+  FacialPage: TInputQueryWizardPage;
 
 function ReadJsonValue(Text, Key: String): String;
 var
@@ -95,6 +96,10 @@ begin
   Value := ReadJsonValue(Text, 'theraBase'); if Value <> '' then TheraPage.Values[0] := Value;
   Value := ReadJsonValue(Text, 'deviceSecret'); if Value <> '' then TheraPage.Values[1] := Value;
   Value := ReadJsonValue(Text, 'pollSeconds'); if Value <> '' then TheraPage.Values[2] := Value;
+  Value := ReadJsonValue(Text, 'identificationDistanceCm'); if Value <> '' then FacialPage.Values[0] := Value;
+  Value := ReadJsonValue(Text, 'livenessMode'); if Value <> '' then FacialPage.Values[1] := Value;
+  Value := ReadJsonValue(Text, 'limitDisplayRegion'); if Value <> '' then FacialPage.Values[2] := Value;
+  Value := ReadJsonValue(Text, 'enablePhotoUpload'); if Value <> '' then FacialPage.Values[3] := Value;
 end;
 
 function JsonEscape(Value: String): String;
@@ -131,6 +136,19 @@ begin
   TheraPage.Add('Intervalo de coleta (segundos):', False);
   TheraPage.Values[0] := 'https://pediuai-api.debita.ai/thera';
   TheraPage.Values[2] := '15';
+
+  FacialPage := CreateInputQueryPage(TheraPage.ID,
+    'Configurações faciais',
+    'Ajuste a distância e a segurança do reconhecimento facial.',
+    '50 cm é um ponto de partida recomendado. Use 1 para ativar e 0 para desativar as opções.');
+  FacialPage.Add('Distância de identificação (cm):', False);
+  FacialPage.Add('Liveness rigoroso (1/0):', False);
+  FacialPage.Add('Limitar à região da tela (1/0):', False);
+  FacialPage.Add('Enviar foto da batida (1/0):', False);
+  FacialPage.Values[0] := '50';
+  FacialPage.Values[1] := '1';
+  FacialPage.Values[2] := '1';
+  FacialPage.Values[3] := '1';
   LoadExistingConfig;
 end;
 
@@ -149,6 +167,11 @@ begin
   Result := Parsed > 0;
 end;
 
+function BoolJson(Value: String): String;
+begin
+  if Trim(Value) = '1' then Result := 'true' else Result := 'false';
+end;
+
 function NextButtonClick(CurPageID: Integer): Boolean;
 begin
   Result := True;
@@ -162,6 +185,12 @@ begin
     if Trim(TheraPage.Values[0]) = '' then begin MsgBox('Informe o endereço do Thera.', mbError, MB_OK); Result := False; exit; end;
     if Trim(TheraPage.Values[1]) = '' then begin MsgBox('Informe o segredo do Thera.', mbError, MB_OK); Result := False; exit; end;
     if not IsIntegerInRange(TheraPage.Values[2], 1, 86400) then begin MsgBox('O intervalo deve ser um número entre 1 e 86400 segundos.', mbError, MB_OK); Result := False; exit; end;
+  end;
+  if CurPageID = FacialPage.ID then begin
+    if not IsIntegerInRange(FacialPage.Values[0], 30, 200) then begin MsgBox('A distância deve ser um número entre 30 e 200 cm.', mbError, MB_OK); Result := False; exit; end;
+    if not IsIntegerInRange(FacialPage.Values[1], 0, 1) then begin MsgBox('Liveness deve ser 1 ou 0.', mbError, MB_OK); Result := False; exit; end;
+    if not IsIntegerInRange(FacialPage.Values[2], 0, 1) then begin MsgBox('A região da tela deve ser 1 ou 0.', mbError, MB_OK); Result := False; exit; end;
+    if not IsIntegerInRange(FacialPage.Values[3], 0, 1) then begin MsgBox('Foto da batida deve ser 1 ou 0.', mbError, MB_OK); Result := False; exit; end;
   end;
 end;
 
@@ -190,6 +219,12 @@ begin
       '  "theraBase": "' + JsonEscape(Trim(TheraPage.Values[0])) + '",' + #13#10 +
       '  "deviceSecret": "' + JsonEscape(Trim(TheraPage.Values[1])) + '",' + #13#10 +
       '  "pollSeconds": ' + Trim(TheraPage.Values[2]) + ',' + #13#10 +
+      '  "facial": {' + #13#10 +
+      '    "identificationDistanceCm": ' + Trim(FacialPage.Values[0]) + ',' + #13#10 +
+      '    "livenessMode": ' + BoolJson(FacialPage.Values[1]) + ',' + #13#10 +
+      '    "limitDisplayRegion": ' + BoolJson(FacialPage.Values[2]) + ',' + #13#10 +
+      '    "enablePhotoUpload": ' + BoolJson(FacialPage.Values[3]) + #13#10 +
+      '  },' + #13#10 +
       '  "update": {' + #13#10 +
       '    "repo": "p-lacerda/pontopar-coletor",' + #13#10 +
       '    "checkHours": 6,' + #13#10 +

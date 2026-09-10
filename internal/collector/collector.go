@@ -163,7 +163,16 @@ func (c *Collector) syncUsers(ctx context.Context) error {
 		return fmt.Errorf("manifesto é do device %s, configurado %s", manifest.DeviceID, itoa(c.cfg.DeviceIdInt()))
 	}
 	if manifest.Configuration != nil {
-		if err := c.device.SetFacialConfiguration(ctx, manifest.Configuration.EnablePhotoUpload, manifest.Configuration.LivenessMode, manifest.Configuration.LimitDisplayRegion, manifest.Configuration.IdentificationDistanceCm); err != nil {
+		face := *manifest.Configuration
+		// Valores preenchidos no Setup têm precedência local; a API continua
+		// sendo o canal de sincronização quando o coletor volta online.
+		if c.cfg.Facial.IdentificationDistanceCm != 0 {
+			face.IdentificationDistanceCm = c.cfg.Facial.IdentificationDistanceCm
+			face.EnablePhotoUpload = c.cfg.Facial.EnablePhotoUpload
+			face.LivenessMode = c.cfg.Facial.LivenessMode
+			face.LimitDisplayRegion = c.cfg.Facial.LimitDisplayRegion
+		}
+		if err := c.device.SetFacialConfiguration(ctx, face.EnablePhotoUpload, face.LivenessMode, face.LimitDisplayRegion, face.IdentificationDistanceCm); err != nil {
 			return fmt.Errorf("aplicar configuração facial: %w", err)
 		}
 	}
