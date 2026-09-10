@@ -607,7 +607,11 @@ func (c *Client) syncImages(ctx context.Context, users []User) error {
 			return err
 		}
 		endpoint := c.base + "/user_set_image.fcgi?user_id=" + strconv.FormatInt(id, 10) + "&timestamp=" + strconv.FormatInt(time.Now().Unix(), 10) + "&match=1&session=" + url.QueryEscape(c.Session())
-		data, status, err := c.postBytes(ctx, endpoint, "image/jpeg", u.Image)
+		// O iDFace exige application/octet-stream neste endpoint. Embora o
+		// conteúdo seja JPEG, enviar image/jpeg faz alguns firmwares tentarem
+		// interpretar o corpo como texto/hex e retornarem erros como
+		// "invalid hexadecimal digit" durante a sincronização.
+		data, status, err := c.postBytes(ctx, endpoint, "application/octet-stream", u.Image)
 		if err != nil {
 			return fmt.Errorf("cadastrar face %s: %w", u.Registration, err)
 		}
