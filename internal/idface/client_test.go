@@ -87,3 +87,35 @@ func TestResolveRegistrationsCachesAndMarksMissing(t *testing.T) {
 		t.Errorf("apos 2a chamada, user 10 mudou: %q", got)
 	}
 }
+
+func TestSyncClockPostsExpectedFields(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/session_is_valid.fcgi" {
+			_, _ = w.Write([]byte(`{"session_is_valid":true}`))
+			return
+		}
+		if r.URL.Path != "/set_system_time.fcgi" || r.URL.Query().Get("session") != "sess 1" {
+			t.Fatalf("endpoint/sessão inesperados: %s", r.URL.String())
+		}
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatalf("body inválido: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "admin", "admin", &http.Client{Timeout: 2 * time.Second}, nopLogger{})
+	c.session = "sess 1"
+	now := time.Date(2026, 9, 11, 8, 3, 7, 0, time.FixedZone("BRT", -3*60*60))
+	if err := c.SyncClock(context.Background(), now); err != nil {
+		t.Fatalf("SyncClock: %v", err)
+	}
+	for k, want := range map[string]float64{"day": 11, "month": 9, "year": 2026, "hour": 8, "minute": 3, "second": 7} {
+		if got[k] != want {
+			t.Errorf("%s: quero %v, veio %v", k, want, got[k])
+		}
+	}
+}

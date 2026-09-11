@@ -63,11 +63,13 @@ type Collector struct {
 	thera  *thera.Client
 	cursor *store.Cursor
 
-	updater     UpdateHook
-	updateEvery time.Duration
-	onUpdated   OnUpdatedFunc
-	lastSync    time.Time
-	syncEvery   time.Duration
+	updater        UpdateHook
+	updateEvery    time.Duration
+	onUpdated      OnUpdatedFunc
+	lastSync       time.Time
+	syncEvery      time.Duration
+	lastClockSync  time.Time
+	clockSyncEvery time.Duration
 }
 
 // New monta um coletor a partir da config e do diretório-base (onde ficam
@@ -84,6 +86,9 @@ func New(cfg *config.Config, dir string, log Logger) *Collector {
 		thera:     thera.New(cfg.TheraDaoURL(), theraHTTP),
 		cursor:    store.NewCursor(dir),
 		syncEvery: 5 * time.Minute,
+		// Mantém o relógio do terminal alinhado mesmo depois de uma troca de
+		// horário no Windows. A chamada é pequena e best-effort.
+		clockSyncEvery: 5 * time.Minute,
 	}
 }
 
@@ -118,6 +123,14 @@ func (c *Collector) SetUpdater(hook UpdateHook, every time.Duration, onUpdated O
 func (c *Collector) tick(ctx context.Context) error {
 	if err := c.device.EnsureSession(ctx); err != nil {
 		return err
+	}
+	if c.lastClockSync.IsZero() || time.Since(c.lastClockSync) >= c.clockSyncEvery {
+		now := time.Now().Truncate(time.Second)
+		if err := c.device.SyncClock(ctx, now); err != nil {
+			c.log.Errorf("sincronização do relógio falhou (batidas continuam): %v", err)
+		} else {
+			c.lastClockSync = now
+		}
 	}
 	// A sincronização é best-effort: indisponibilidade temporária do endpoint
 	// não pode interromper a importação fiscal das batidas.

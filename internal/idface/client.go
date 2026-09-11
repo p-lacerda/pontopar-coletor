@@ -261,6 +261,35 @@ func (c *Client) EnsureSession(ctx context.Context) error {
 	return c.Login(ctx)
 }
 
+// SyncClock ajusta o relógio do iDFace para o instante informado.
+//
+// O endpoint pertence à API da linha Access/iDFace (não ao endpoint de
+// configuração geral): ele espera os campos de data/hora separados e a sessão
+// na query string. O coletor chama este método de forma best-effort, portanto
+// uma falha de rede não interrompe a importação das batidas.
+func (c *Client) SyncClock(ctx context.Context, now time.Time) error {
+	if err := c.EnsureSession(ctx); err != nil {
+		return err
+	}
+	body := map[string]int{
+		"day": now.Day(), "month": int(now.Month()), "year": now.Year(),
+		"hour": now.Hour(), "minute": now.Minute(), "second": now.Second(),
+	}
+	endpoint := c.base + "/set_system_time.fcgi?session=" + url.QueryEscape(c.Session())
+	data, status, err := c.postJSON(ctx, endpoint, body)
+	if err != nil {
+		return fmt.Errorf("ajuste de horário no aparelho falhou: %w", err)
+	}
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		c.ClearSession()
+	}
+	if status < 200 || status >= 300 {
+		return fmt.Errorf("ajuste de horário no aparelho respondeu %d: %s", status, strings.TrimSpace(string(data)))
+	}
+	c.log.Infof("relógio do iDFace sincronizado: %s", now.Format("02/01/2006 15:04:05"))
+	return nil
+}
+
 // SetFacialConfiguration aplica configurações idempotentes do iDFace. O
 // servidor só envia esse pequeno objeto no manifesto; nada fica acumulado no
 // processo do coletor.
