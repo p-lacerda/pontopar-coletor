@@ -293,7 +293,7 @@ func (c *Client) SyncClock(ctx context.Context, now time.Time) error {
 // SetFacialConfiguration aplica configurações idempotentes do iDFace. O
 // servidor só envia esse pequeno objeto no manifesto; nada fica acumulado no
 // processo do coletor.
-func (c *Client) SetFacialConfiguration(ctx context.Context, enablePhotoUpload, livenessMode, limitDisplayRegion bool, identificationDistanceCm float64, enforceSchedules bool) error {
+func (c *Client) SetFacialConfiguration(ctx context.Context, enablePhotoUpload, livenessMode, limitDisplayRegion bool, identificationDistanceCm float64, attendanceMode string) error {
 	toFlag := func(v bool) string {
 		if v {
 			return "1"
@@ -305,11 +305,19 @@ func (c *Client) SetFacialConfiguration(ctx context.Context, enablePhotoUpload, 
 		// O firmware recebe min_detect_bounds_width, não centímetros.
 		face["min_detect_bounds_width"] = strconv.FormatFloat(11.6/identificationDistanceCm, 'f', 2, 64)
 	}
-	// Quando a empresa publica jornadas, o terminal precisa sair do modo ponto
-	// puro para que o firmware avalie access_rules/time_zones. Sem jornadas,
-	// preservamos attendance_mode=1, que aceita qualquer usuário cadastrado.
+	mode := strings.ToLower(strings.TrimSpace(attendanceMode))
+	if mode == "" {
+		mode = "attendance"
+	}
+	if mode != "attendance" && mode != "access" {
+		return fmt.Errorf("attendanceMode inválido %q (use attendance ou access)", attendanceMode)
+	}
+	// No modo attendance (attendance_mode=1), o Control iD registra ponto para
+	// usuário facial cadastrado e não bloqueia a batida por uma escala ausente.
+	// O modo access (attendance_mode=0) é opt-in e deixa o terminal avaliar as
+	// access_rules/time_zones publicadas pelo coletor.
 	body := map[string]any{
-		"general":    map[string]string{"attendance_mode": map[bool]string{true: "0", false: "1"}[enforceSchedules]},
+		"general":    map[string]string{"attendance_mode": map[string]string{"attendance": "1", "access": "0"}[mode]},
 		"identifier": map[string]string{"log_type": "0"},
 		"monitor":    map[string]string{"enable_photo_upload": toFlag(enablePhotoUpload)},
 		"face_id":    face,

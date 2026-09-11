@@ -124,6 +124,10 @@ func Run(version string) error {
 	if err != nil {
 		return err
 	}
+	terminalMode, err := addLine(form, "Modo do terminal (attendance/access)", terminalModeText(cfg.Facial.TerminalMode), false, false)
+	if err != nil {
+		return err
+	}
 	if _, err := addLine(form, "Atualizações", cfg.Update.Repo, false, true); err != nil {
 		return err
 	}
@@ -191,6 +195,10 @@ func Run(version string) error {
 			return nil, err
 		}
 		if updated.Facial.EnablePhotoUpload, err = parseBoolFlag(photo.Text(), "foto da batida"); err != nil {
+			return nil, err
+		}
+		updated.Facial.TerminalMode, err = parseTerminalMode(terminalMode.Text())
+		if err != nil {
 			return nil, err
 		}
 
@@ -386,6 +394,24 @@ func parseBoolFlag(raw, name string) (bool, error) {
 		return false, nil
 	}
 	return false, fmt.Errorf("%s deve ser 1 ou 0", name)
+}
+
+func terminalModeText(raw string) string {
+	if strings.EqualFold(strings.TrimSpace(raw), "access") {
+		return "access"
+	}
+	return "attendance"
+}
+
+func parseTerminalMode(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "attendance", "ponto":
+		return "attendance", nil
+	case "access", "acesso":
+		return "access", nil
+	default:
+		return "", fmt.Errorf("modo do terminal deve ser attendance ou access")
+	}
 }
 
 func positiveInt(raw, name string, min, max int) (int, error) {

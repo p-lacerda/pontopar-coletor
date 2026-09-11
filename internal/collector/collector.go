@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/p-lacerda/pontopar-coletor/internal/config"
@@ -186,6 +187,16 @@ func (c *Collector) syncUsers(ctx context.Context) error {
 			config.LivenessMode = c.cfg.Facial.LivenessMode
 			config.LimitDisplayRegion = c.cfg.Facial.LimitDisplayRegion
 		}
+		// O campo local permite escolher o modo mesmo com uma API antiga. Se
+		// estiver vazio (config legado), usa o manifesto; sem ambos, attendance.
+		mode := strings.ToLower(strings.TrimSpace(c.cfg.Facial.TerminalMode))
+		if mode == "" {
+			mode = strings.ToLower(strings.TrimSpace(config.AttendanceMode))
+		}
+		if mode == "" {
+			mode = "attendance"
+		}
+		config.AttendanceMode = mode
 		face = &config
 	}
 	// Lê o aparelho ANTES de aplicar o manifesto. O servidor compara esta
@@ -215,7 +226,7 @@ func (c *Collector) syncUsers(ctx context.Context) error {
 	if err := c.device.UpsertUsers(ctx, users, time.Now().Unix()); err != nil {
 		return err
 	}
-	if face != nil && face.EnforceSchedules {
+	if face != nil && face.AttendanceMode == "access" && face.EnforceSchedules {
 		schedules := make([]idface.Schedule, 0, len(manifest.Configuration.Schedules))
 		for _, s := range manifest.Configuration.Schedules {
 			rules := make([]idface.ScheduleRule, 0, len(s.Rules))
@@ -233,7 +244,7 @@ func (c *Collector) syncUsers(ctx context.Context) error {
 	// publicadas. Assim uma falha intermediária nunca deixa o relógio em modo
 	// de autorização sem uma regra válida.
 	if face != nil {
-		if err := c.device.SetFacialConfiguration(ctx, face.EnablePhotoUpload, face.LivenessMode, face.LimitDisplayRegion, face.IdentificationDistanceCm, face.EnforceSchedules); err != nil {
+		if err := c.device.SetFacialConfiguration(ctx, face.EnablePhotoUpload, face.LivenessMode, face.LimitDisplayRegion, face.IdentificationDistanceCm, face.AttendanceMode); err != nil {
 			return fmt.Errorf("aplicar configuração facial: %w", err)
 		}
 	}

@@ -76,12 +76,15 @@ type SyncManifest struct {
 	Configuration *DeviceConfiguration `json:"configuration,omitempty"`
 }
 type DeviceConfiguration struct {
-	EnablePhotoUpload        bool             `json:"enablePhotoUpload"`
-	LivenessMode             bool             `json:"livenessMode"`
-	LimitDisplayRegion       bool             `json:"limitDisplayRegion"`
-	IdentificationDistanceCm float64          `json:"identificationDistanceCm,omitempty"`
-	EnforceSchedules         bool             `json:"enforceSchedules"`
-	Schedules                []DeviceSchedule `json:"schedules,omitempty"`
+	EnablePhotoUpload        bool    `json:"enablePhotoUpload"`
+	LivenessMode             bool    `json:"livenessMode"`
+	LimitDisplayRegion       bool    `json:"limitDisplayRegion"`
+	IdentificationDistanceCm float64 `json:"identificationDistanceCm,omitempty"`
+	// Attendance é o padrão para marcação de ponto; access habilita as regras
+	// de acesso/horário do terminal quando explicitamente escolhido.
+	AttendanceMode   string           `json:"attendanceMode,omitempty"`
+	EnforceSchedules bool             `json:"enforceSchedules"`
+	Schedules        []DeviceSchedule `json:"schedules,omitempty"`
 }
 
 type DeviceScheduleRule struct {

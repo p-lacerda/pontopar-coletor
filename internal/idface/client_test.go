@@ -119,3 +119,35 @@ func TestSyncClockPostsExpectedFields(t *testing.T) {
 		}
 	}
 }
+
+func TestSetFacialConfigurationDefaultsToAttendance(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/session_is_valid.fcgi" {
+			_, _ = w.Write([]byte(`{"session_is_valid":true}`))
+			return
+		}
+		data, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(data, &body); err != nil {
+			t.Fatalf("body inválido: %v", err)
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "admin", "admin", &http.Client{Timeout: 2 * time.Second}, nopLogger{})
+	c.session = "sess"
+	if err := c.SetFacialConfiguration(context.Background(), true, true, true, 50, ""); err != nil {
+		t.Fatalf("attendance padrão: %v", err)
+	}
+	general, ok := body["general"].(map[string]any)
+	if !ok || general["attendance_mode"] != "1" {
+		t.Fatalf("attendance_mode padrão deveria ser 1, body=%v", body)
+	}
+	if err := c.SetFacialConfiguration(context.Background(), true, true, true, 50, "access"); err != nil {
+		t.Fatalf("access explícito: %v", err)
+	}
+	general, ok = body["general"].(map[string]any)
+	if !ok || general["attendance_mode"] != "0" {
+		t.Fatalf("access deveria ser 0, body=%v", body)
+	}
+}

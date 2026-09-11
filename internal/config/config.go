@@ -35,6 +35,11 @@ type FacialConfig struct {
 	LivenessMode             bool    `json:"livenessMode"`
 	LimitDisplayRegion       bool    `json:"limitDisplayRegion"`
 	IdentificationDistanceCm float64 `json:"identificationDistanceCm"`
+	// TerminalMode controla o modo do iDFace: attendance registra ponto de
+	// qualquer usuário facial cadastrado; access aplica as regras de acesso do
+	// terminal. Attendance é o padrão para não transformar uma escala ausente
+	// em "acesso negado" e perder uma marcação.
+	TerminalMode string `json:"terminalMode"`
 }
 
 // flexInt64 aceita, no JSON, tanto número quanto string (o config.json de
@@ -86,7 +91,7 @@ type Config struct {
 func Default() *Config {
 	return &Config{DeviceIp: "192.168.1.111", DevicePort: 90, Login: "admin", DeviceId: flexInt64(4409419584542362), PollSeconds: 15,
 		TheraBase: "https://pediuai-api.debita.ai/thera",
-		Facial:    FacialConfig{EnablePhotoUpload: true, LivenessMode: true, LimitDisplayRegion: true, IdentificationDistanceCm: 50},
+		Facial:    FacialConfig{EnablePhotoUpload: true, LivenessMode: true, LimitDisplayRegion: true, IdentificationDistanceCm: 50, TerminalMode: "attendance"},
 		Update:    UpdateConfig{Repo: "p-lacerda/pontopar-coletor", CheckHours: 6}}
 }
 
@@ -238,6 +243,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Facial.IdentificationDistanceCm != 0 && (c.Facial.IdentificationDistanceCm < 30 || c.Facial.IdentificationDistanceCm > 200) {
 		return fmt.Errorf("identificationDistanceCm deve estar entre 30 e 200 cm")
+	}
+	if c.Facial.TerminalMode != "" && c.Facial.TerminalMode != "attendance" && c.Facial.TerminalMode != "access" {
+		return fmt.Errorf("terminalMode deve ser attendance ou access")
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("config.json incompleto, faltam campos: %s", strings.Join(missing, ", "))

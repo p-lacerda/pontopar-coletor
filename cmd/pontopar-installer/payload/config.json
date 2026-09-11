@@ -7,6 +7,13 @@
   "theraBase": "https://pediuai-api.debita.ai/thera",
   "deviceSecret": "",
   "pollSeconds": 15,
+  "facial": {
+    "enablePhotoUpload": true,
+    "livenessMode": true,
+    "limitDisplayRegion": true,
+    "identificationDistanceCm": 50,
+    "terminalMode": "attendance"
+  },
   "update": {
     "repo": "p-lacerda/pontopar-coletor",
     "checkHours": 6,
