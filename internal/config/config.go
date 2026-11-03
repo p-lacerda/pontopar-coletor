@@ -102,6 +102,10 @@ type Config struct {
 	// RetryBackoffSeconds é a base do backoff exponencial entre tentativas de
 	// reenvio. Default 2s (2s, 4s, 8s, ... limitado a 30s).
 	RetryBackoffSeconds int `json:"retryBackoffSeconds"`
+	// ForwardBatch é quantas batidas vão num ÚNICO POST ao Thera (envelope
+	// object_changes) no full-sync. Quanto maior, menos requests (evita o 429 do
+	// limitador por IP). Default 200. Entre 1 e 1000.
+	ForwardBatch int `json:"forwardBatch"`
 	// RegistrationOverrides mapeia user_id (interno do aparelho, string) ->
 	// matrícula, para forçar a tradução quando o usuário no aparelho não tem o
 	// campo registration preenchido corretamente. Tem PRIORIDADE sobre o de-para
@@ -119,7 +123,7 @@ type Config struct {
 func Default() *Config {
 	enabled := true
 	return &Config{DeviceIp: "192.168.1.111", DevicePort: 90, Login: "admin", DeviceId: flexInt64(4409419584542362), PollSeconds: 15,
-		BatchSize: 500, MaxRetries: 4, RetryBackoffSeconds: 2,
+		BatchSize: 500, ForwardBatch: 200, MaxRetries: 4, RetryBackoffSeconds: 2,
 		TheraBase: "https://pediuai-api.debita.ai/thera",
 		Facial:    FacialConfig{EnablePhotoUpload: true, LivenessMode: true, LimitDisplayRegion: true, IdentificationDistanceCm: 50, TerminalMode: "attendance"},
 		Update:    UpdateConfig{Repo: "p-lacerda/pontopar-coletor", CheckHours: 6},
@@ -178,6 +182,18 @@ func (c *Config) BatchSizeOr() int {
 		return 1000
 	}
 	return c.BatchSize
+}
+
+// ForwardBatchOr devolve o nº de batidas por POST ao Thera no full-sync
+// (default 200, limitado a 1..1000).
+func (c *Config) ForwardBatchOr() int {
+	if c.ForwardBatch <= 0 {
+		return 200
+	}
+	if c.ForwardBatch > 1000 {
+		return 1000
+	}
+	return c.ForwardBatch
 }
 
 // MaxRetriesOr devolve o número de retentativas por batida (default 4).
@@ -337,6 +353,9 @@ func (c *Config) Validate() error {
 	}
 	if c.BatchSize != 0 && (c.BatchSize < 1 || c.BatchSize > 1000) {
 		return fmt.Errorf("batchSize deve estar entre 1 e 1000")
+	}
+	if c.ForwardBatch != 0 && (c.ForwardBatch < 1 || c.ForwardBatch > 1000) {
+		return fmt.Errorf("forwardBatch deve estar entre 1 e 1000")
 	}
 	if c.UI.Port != 0 && (c.UI.Port < 1 || c.UI.Port > 65535) {
 		return fmt.Errorf("ui.port deve estar entre 1 e 65535")

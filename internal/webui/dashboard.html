@@ -97,9 +97,14 @@
   <!-- FULL SYNC -->
   <section class="panel">
     <h2>Consultar o Control iD completo (full-sync)</h2>
-    <p class="hint">Puxa TODO o histórico de batidas do aparelho de uma vez, em ordem, carregando o horário real de cada evento. É seguro repetir (o Thera deduplica por aparelho+id+hora) e retomável se for interrompido. Use para recuperar tudo de forma confiável, sem receber "por partes".</p>
+    <p class="hint">Puxa o histórico de batidas do aparelho de uma vez, em ordem, carregando o horário real de cada evento. Envia em LOTES (poucas requisições, sem "too many requests") e é à prova de falha: respeita o limite do servidor e nunca desiste no meio. É seguro repetir (o Thera deduplica por aparelho+id+hora) e retomável se for interrompido.</p>
     <div class="row" style="margin-top:12px">
-      <div class="field" style="max-width:180px"><label>Começar a partir do id</label><input id="fsStart" type="number" value="0" min="0"></div>
+      <div class="field" style="max-width:150px"><label>Começar a partir do id</label><input id="fsStart" type="number" value="0" min="0"></div>
+      <div class="field" style="max-width:170px"><label>Período — início (opcional)</label><input id="fsFrom" type="date"></div>
+      <div class="field" style="max-width:170px"><label>Período — fim (opcional)</label><input id="fsTo" type="date"></div>
+    </div>
+    <p class="hint">Deixe as datas em branco para puxar TUDO. Preencha para recuperar só um período (ex.: outubro inteiro → 01/10 a 31/10).</p>
+    <div class="row" style="margin-top:10px">
       <button id="btnFull">Consultar completo</button>
       <button class="ghost" id="btnFullResume">Retomar interrompido</button>
       <span class="hint" id="fsState"></span>
@@ -267,7 +272,7 @@ async function saveConfig(){
 $('btnSave').onclick=saveConfig;
 $('btnTestDevice').onclick=async()=>{ try{ const r=await api('/api/test-device',{method:'POST'}); toast(r.ok?'Control iD respondeu ✓':'Falhou: '+r.error, r.ok);}catch(e){toast(e.message,false);} };
 $('btnTestThera').onclick=async()=>{ try{ const r=await api('/api/test-thera',{method:'POST'}); toast(r.ok?'Thera respondeu ✓':'Falhou: '+r.error, r.ok);}catch(e){toast(e.message,false);} };
-$('btnFull').onclick=async()=>{ const s=+$('fsStart').value||0; try{ await api('/api/fullsync',{method:'POST',body:JSON.stringify({startId:s})}); toast('Full-sync iniciado'); refreshStatus();}catch(e){toast(e.message,false);} };
+$('btnFull').onclick=async()=>{ const s=+$('fsStart').value||0; const fromDate=$('fsFrom').value||''; const toDate=$('fsTo').value||''; const msg=(fromDate||toDate)?('Full-sync do período '+(fromDate||'início')+' → '+(toDate||'fim')+' iniciado'):'Full-sync iniciado'; try{ await api('/api/fullsync',{method:'POST',body:JSON.stringify({startId:s,fromDate,toDate})}); toast(msg); refreshStatus();}catch(e){toast(e.message,false);} };
 $('btnFullResume').onclick=async()=>{ try{ await api('/api/fullsync',{method:'POST',body:JSON.stringify({startId:-1})}); toast('Retomando full-sync');refreshStatus();}catch(e){toast(e.message,false);} };
 $('autostart').onchange=async(e)=>{ try{ await api('/api/autostart',{method:'POST',body:JSON.stringify({enabled:e.target.checked})}); toast('Início automático: '+(e.target.checked?'ligado':'desligado'));}catch(err){toast(err.message,false);e.target.checked=!e.target.checked;} };
 $('btnStart').onclick=async()=>{ try{ await api('/api/service/start',{method:'POST'}); toast('Serviço iniciado');refreshStatus();}catch(e){toast(e.message,false);} };

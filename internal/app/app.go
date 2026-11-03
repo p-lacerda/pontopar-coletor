@@ -256,7 +256,10 @@ func (s *Supervisor) SaveConfig(cfg *config.Config) error {
 	return nil
 }
 
-func (s *Supervisor) TriggerFullSync(startID int64) error {
+// TriggerFullSync dispara o full-sync em segundo plano. startID<0 retoma; 0 começa
+// do início. fromUnix/toUnix (epoch em segundos; 0 = sem limite) recortam o
+// período — se ambos 0, é o histórico total.
+func (s *Supervisor) TriggerFullSync(startID, fromUnix, toUnix int64) error {
 	col, _ := s.current()
 	if col == nil {
 		return fmt.Errorf("coletor não está ativo (config inválida?)")
@@ -268,11 +271,15 @@ func (s *Supervisor) TriggerFullSync(startID int64) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	note := "disparado pelo painel"
+	if fromUnix > 0 || toUnix > 0 {
+		note = "disparado pelo painel (período)"
+	}
 	go func() {
 		// Timeout generoso: um histórico grande pode levar minutos.
 		fsCtx, cancel := context.WithTimeout(ctx, 60*time.Minute)
 		defer cancel()
-		if _, err := col.FullSync(fsCtx, startID, "disparado pelo painel"); err != nil {
+		if _, err := col.FullSync(fsCtx, startID, fromUnix, toUnix, note); err != nil {
 			s.log.Errorf("full-sync terminou com erro: %v", err)
 		}
 	}()

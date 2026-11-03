@@ -96,9 +96,10 @@ func fakeDevice(t *testing.T, logs []fakeLog, regByUser map[string]string) *http
 
 // fakeThera captura todos os /dao recebidos.
 type fakeThera struct {
-	srv *httptest.Server
-	mu  sync.Mutex
-	dao []map[string]string // id -> time, por envio (lista de values)
+	srv   *httptest.Server
+	mu    sync.Mutex
+	dao   []map[string]string // id -> time, por envio (lista de values)
+	calls int                 // nº de REQUISIÇÕES /dao (p/ provar o batelamento)
 }
 
 func newFakeThera() *fakeThera {
@@ -113,6 +114,7 @@ func newFakeThera() *fakeThera {
 			}
 			_ = json.Unmarshal(body, &p)
 			ft.mu.Lock()
+			ft.calls++
 			for _, oc := range p.ObjectChanges {
 				ft.dao = append(ft.dao, oc.Values)
 			}
@@ -129,6 +131,12 @@ func (ft *fakeThera) sent() []map[string]string {
 	ft.mu.Lock()
 	defer ft.mu.Unlock()
 	return append([]map[string]string(nil), ft.dao...)
+}
+
+func (ft *fakeThera) reqCount() int {
+	ft.mu.Lock()
+	defer ft.mu.Unlock()
+	return ft.calls
 }
 
 func newTestCollector(t *testing.T, deviceURL, theraURL string) (*Collector, *state.State, *audit.Log) {
@@ -161,7 +169,7 @@ func TestFullSyncCarriesRealTimeAndRefusesMissingTime(t *testing.T) {
 
 	c, st, au := newTestCollector(t, dev.URL, ft.srv.URL)
 
-	rec, err := c.FullSync(context.Background(), 0, "teste")
+	rec, err := c.FullSync(context.Background(), 0, 0, 0, "teste")
 	if err != nil {
 		t.Fatalf("FullSync erro: %v", err)
 	}
@@ -222,15 +230,64 @@ func TestFullSyncResumeAndIdempotent(t *testing.T) {
 	defer ft.srv.Close()
 	c, _, _ := newTestCollector(t, dev.URL, ft.srv.URL)
 
-	if _, err := c.FullSync(context.Background(), 0, ""); err != nil {
+	if _, err := c.FullSync(context.Background(), 0, 0, 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	// Re-rodar reenvia tudo (o backend é quem deduplica — o coletor sempre carrega o time real).
-	if _, err := c.FullSync(context.Background(), 0, ""); err != nil {
+	if _, err := c.FullSync(context.Background(), 0, 0, 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	if n := len(ft.sent()); n != 4 {
 		t.Fatalf("dois full-syncs de 2 batidas deveriam enviar 4 (dedupe é do backend), veio %d", n)
+	}
+}
+
+// TestFullSyncBatchesAndFiltersPeriod prova as duas garantias novas: (1) envio em
+// LOTE — várias batidas numa única requisição /dao (poucas requests → sem 429); e
+// (2) recorte por PERÍODO — só as batidas dentro do intervalo são enviadas.
+func TestFullSyncBatchesAndFiltersPeriod(t *testing.T) {
+	logs := []fakeLog{
+		{ID: 1, Time: "1700000001", User: "100"}, // antes do período
+		{ID: 2, Time: "1700000100", User: "100"}, // antes do período
+		{ID: 3, Time: "1700000200", User: "100"}, // DENTRO
+		{ID: 4, Time: "1700000300", User: "100"}, // DENTRO
+		{ID: 5, Time: "1700000400", User: "100"}, // depois do período
+	}
+	dev := fakeDevice(t, logs, map[string]string{"100": "0001"})
+	defer dev.Close()
+	ft := newFakeThera()
+	defer ft.srv.Close()
+	c, st, _ := newTestCollector(t, dev.URL, ft.srv.URL)
+
+	// Período [1700000150, 1700000350] → só ids 3 e 4.
+	rec, err := c.FullSync(context.Background(), 0, 1700000150, 1700000350, "período")
+	if err != nil {
+		t.Fatalf("FullSync erro: %v", err)
+	}
+	if rec.Forwarded != 2 {
+		t.Errorf("forwarded: quero 2 (ids 3,4), veio %d", rec.Forwarded)
+	}
+
+	sent := ft.sent()
+	if len(sent) != 2 {
+		t.Fatalf("enviados: quero 2, veio %d (%+v)", len(sent), sent)
+	}
+	got := map[string]string{}
+	for _, v := range sent {
+		got[v["id"]] = v["time"]
+	}
+	if got["3"] != "1700000200" || got["4"] != "1700000300" {
+		t.Errorf("deveria ter enviado só 3 e 4 com time real, veio %+v", got)
+	}
+
+	// Batelamento: as 2 batidas foram num ÚNICO POST /dao (não 2 requests).
+	if n := ft.reqCount(); n != 1 {
+		t.Errorf("batelamento: quero 1 requisição /dao carregando as 2 batidas, veio %d", n)
+	}
+
+	// Modo período NÃO mexe no cursor incremental (é um recorte do passado).
+	if st.Get().Cursor != 0 {
+		t.Errorf("cursor incremental não deveria avançar no modo período, veio %d", st.Get().Cursor)
 	}
 }
 

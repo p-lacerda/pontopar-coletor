@@ -32,14 +32,17 @@ func (f *fakeCtrl) LogTail(int) string        { return "linha de log" }
 func (f *fakeCtrl) CurrentConfig() *config.Config {
 	return &config.Config{DeviceIp: "1.2.3.4", Login: "admin", TheraBase: "https://t", DeviceSecret: "s"}
 }
-func (f *fakeCtrl) SaveConfig(c *config.Config) error   { f.savedConfig = c; return nil }
-func (f *fakeCtrl) TriggerFullSync(startID int64) error { f.fullCalled++; return nil }
-func (f *fakeCtrl) TestDevice() error                   { return nil }
-func (f *fakeCtrl) TestThera() error                    { return nil }
-func (f *fakeCtrl) SetAutoStart(enable bool) error      { f.autostartSet = &enable; return nil }
-func (f *fakeCtrl) StartService() error                 { return nil }
-func (f *fakeCtrl) StopService() error                  { return nil }
-func (f *fakeCtrl) Version() string                     { return "vtest" }
+func (f *fakeCtrl) SaveConfig(c *config.Config) error { f.savedConfig = c; return nil }
+func (f *fakeCtrl) TriggerFullSync(startID, fromUnix, toUnix int64) error {
+	f.fullCalled++
+	return nil
+}
+func (f *fakeCtrl) TestDevice() error              { return nil }
+func (f *fakeCtrl) TestThera() error               { return nil }
+func (f *fakeCtrl) SetAutoStart(enable bool) error { f.autostartSet = &enable; return nil }
+func (f *fakeCtrl) StartService() error            { return nil }
+func (f *fakeCtrl) StopService() error             { return nil }
+func (f *fakeCtrl) Version() string                { return "vtest" }
 
 func startTestServer(t *testing.T) (*Server, string) {
 	ctrl := &fakeCtrl{st: state.New(t.TempDir(), "vtest")}

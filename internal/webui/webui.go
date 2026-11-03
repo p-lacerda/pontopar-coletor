@@ -58,7 +58,8 @@ type Controller interface {
 	// SaveConfig grava config.json e sinaliza recarga do coletor.
 	SaveConfig(*config.Config) error
 	// TriggerFullSync dispara o full-sync em segundo plano. startID<0 retoma.
-	TriggerFullSync(startID int64) error
+	// fromUnix/toUnix (epoch em segundos; 0 = sem limite) recortam o período.
+	TriggerFullSync(startID, fromUnix, toUnix int64) error
 	// TestDevice/TestThera checam conectividade sob demanda.
 	TestDevice() error
 	TestThera() error
@@ -257,18 +258,62 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleFullSync(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		StartID *int64 `json:"startId"`
+		StartID  *int64 `json:"startId"`
+		FromDate string `json:"fromDate"` // "YYYY-MM-DD" (data local, opcional)
+		ToDate   string `json:"toDate"`   // "YYYY-MM-DD" (data local, opcional)
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	start := int64(0)
 	if body.StartID != nil {
 		start = *body.StartID
 	}
-	if err := s.ctrl.TriggerFullSync(start); err != nil {
+	fromUnix, err := dayStartUnix(body.FromDate)
+	if err != nil {
+		http.Error(w, "data inicial inválida (use AAAA-MM-DD)", http.StatusBadRequest)
+		return
+	}
+	toUnix, err := dayEndUnix(body.ToDate)
+	if err != nil {
+		http.Error(w, "data final inválida (use AAAA-MM-DD)", http.StatusBadRequest)
+		return
+	}
+	if fromUnix > 0 && toUnix > 0 && toUnix < fromUnix {
+		http.Error(w, "data final anterior à inicial", http.StatusBadRequest)
+		return
+	}
+	if err := s.ctrl.TriggerFullSync(start, fromUnix, toUnix); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+// dayStartUnix converte "AAAA-MM-DD" no INÍCIO do dia (00:00 local) para epoch em
+// segundos. Vazio => 0 (sem limite).
+func dayStartUnix(date string) (int64, error) {
+	date = strings.TrimSpace(date)
+	if date == "" {
+		return 0, nil
+	}
+	t, err := time.ParseInLocation("2006-01-02", date, time.Local)
+	if err != nil {
+		return 0, err
+	}
+	return t.Unix(), nil
+}
+
+// dayEndUnix converte "AAAA-MM-DD" no FIM do dia (23:59:59 local, inclusivo) para
+// epoch em segundos. Vazio => 0 (sem limite).
+func dayEndUnix(date string) (int64, error) {
+	date = strings.TrimSpace(date)
+	if date == "" {
+		return 0, nil
+	}
+	t, err := time.ParseInLocation("2006-01-02", date, time.Local)
+	if err != nil {
+		return 0, err
+	}
+	return t.Add(24*time.Hour - time.Second).Unix(), nil
 }
 
 func (s *Server) handleTestDevice(w http.ResponseWriter, r *http.Request) {

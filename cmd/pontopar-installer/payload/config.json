@@ -8,6 +8,7 @@
   "deviceSecret": "",
   "pollSeconds": 15,
   "batchSize": 500,
+  "forwardBatch": 200,
   "maxRetries": 4,
   "retryBackoffSeconds": 2,
   "registrationOverrides": {},

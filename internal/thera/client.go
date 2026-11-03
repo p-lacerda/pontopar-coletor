@@ -14,8 +14,50 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 )
+
+// HTTPError descreve uma resposta não-2xx do Thera. Carrega o status e, quando
+// presente, o Retry-After (usado pelo coletor para respeitar o 429 do limitador
+// de taxa). Implementa error, então o chamador pode usar errors.As para decidir
+// a estratégia de retentativa sem quebrar quem só quer o texto.
+type HTTPError struct {
+	Status     int
+	RetryAfter time.Duration // 0 se o servidor não informou
+	Body       string
+}
+
+func (e *HTTPError) Error() string {
+	if e.Body != "" {
+		return fmt.Sprintf("Thera respondeu %d: %s", e.Status, e.Body)
+	}
+	return fmt.Sprintf("Thera respondeu %d", e.Status)
+}
+
+// parseRetryAfter lê o header Retry-After (segundos, ou data HTTP). Devolve 0 se
+// ausente/ilegível.
+func parseRetryAfter(h http.Header) time.Duration {
+	v := strings.TrimSpace(h.Get("Retry-After"))
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil {
+		if secs < 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		d := time.Until(t)
+		if d < 0 {
+			return 0
+		}
+		return d
+	}
+	return 0
+}
 
 // DaoValues são os campos da batida (todos STRING, por contrato).
 type DaoValues struct {
@@ -210,11 +252,11 @@ func (c *Client) PostDao(ctx context.Context, payload DaoPayload) error {
 	// Drena o corpo (permite reuso de conexão keep-alive) e captura para o erro.
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		msg := strings.TrimSpace(string(body))
-		if msg != "" {
-			return fmt.Errorf("Thera respondeu %d: %s", resp.StatusCode, msg)
+		return &HTTPError{
+			Status:     resp.StatusCode,
+			RetryAfter: parseRetryAfter(resp.Header),
+			Body:       strings.TrimSpace(string(body)),
 		}
-		return fmt.Errorf("Thera respondeu %d", resp.StatusCode)
 	}
 	return nil
 }

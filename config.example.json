@@ -27,6 +27,8 @@
 
   "_batchSize": "Tamanho da pagina pedida ao aparelho em cada leitura de access_logs. Opcional (default 500, entre 1 e 1000).",
   "batchSize": 500,
+  "_forwardBatch": "Quantas batidas vao num UNICO POST ao Thera no full-sync (menos requests = sem 'too many requests'). Opcional (default 200, entre 1 e 1000).",
+  "forwardBatch": 200,
 
   "_maxRetries": "Retentativas por batida ao enviar ao Thera antes de desistir no ciclo (reprocessa no proximo). Opcional (default 4).",
   "maxRetries": 4,
