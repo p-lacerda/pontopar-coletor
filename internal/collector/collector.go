@@ -128,13 +128,15 @@ type Collector struct {
 	fullCursor      *store.Cursor
 	fullSyncRunning atomic.Bool
 
-	updater        UpdateHook
-	updateEvery    time.Duration
-	onUpdated      OnUpdatedFunc
-	lastSync       time.Time
-	syncEvery      time.Duration
-	lastClockSync  time.Time
-	clockSyncEvery time.Duration
+	updater          UpdateHook
+	updateEvery      time.Duration
+	onUpdated        OnUpdatedFunc
+	lastSync         time.Time
+	syncEvery        time.Duration
+	lastClockSync    time.Time
+	clockSyncEvery   time.Duration
+	lastCommandCheck time.Time
+	commandEvery     time.Duration
 }
 
 // New monta um coletor a partir da config e do diretório-base (onde ficam
@@ -162,6 +164,9 @@ func New(cfg *config.Config, dir string, log Logger, st *state.State, au *audit.
 		// Mantém o relógio do terminal alinhado mesmo depois de uma troca de
 		// horário no Windows. A chamada é pequena e best-effort.
 		clockSyncEvery: 5 * time.Minute,
+		// Comandos on-demand (ex.: full-sync disparado pela web): checagem leve e
+		// frequente para o disparo responder em segundos.
+		commandEvery: 15 * time.Second,
 	}
 	if st != nil {
 		st.SetEndpoints(cfg.DeviceBase(), cfg.TheraBase)
@@ -999,6 +1004,10 @@ func (c *Collector) Run(ctx context.Context) {
 			c.device.ClearSession()
 		}
 
+		// Ponto seguro: sem batida em voo. Consulta comandos on-demand (ex.:
+		// full-sync por período disparado pela web) e dispara se houver.
+		c.maybeRunQueuedFullSync(ctx)
+
 		// Ponto seguro: sem batida em voo. Checa update se estiver na hora.
 		if c.updater != nil && c.updateEvery > 0 && !nextUpdateCheck.IsZero() && time.Now().After(nextUpdateCheck) {
 			nextUpdateCheck = time.Now().Add(c.updateEvery)
@@ -1018,6 +1027,45 @@ func (c *Collector) Run(ctx context.Context) {
 		case <-time.After(poll):
 		}
 	}
+}
+
+// maybeRunQueuedFullSync consulta o Thera por comandos on-demand (full-sync
+// disparado pela web) e, se houver um pendente, dispara o full-sync em segundo
+// plano (o tick pula a coleta incremental enquanto o full-sync roda). É
+// best-effort e barata: gated por commandEvery, nunca derruba o ciclo por falha
+// de rede/endpoint ausente (servidor antigo sem /commands), e não dispara se já
+// houver um full-sync em andamento.
+func (c *Collector) maybeRunQueuedFullSync(ctx context.Context) {
+	if c.commandEvery <= 0 {
+		return
+	}
+	if !c.lastCommandCheck.IsZero() && time.Since(c.lastCommandCheck) < c.commandEvery {
+		return
+	}
+	c.lastCommandCheck = time.Now()
+	if c.fullSyncRunning.Load() {
+		return // já rodando: nem consulta (o comando read-once fica pro próximo)
+	}
+	cmds, err := c.thera.GetCommands(ctx)
+	if err != nil {
+		// Sem barulho: endpoint pode não existir no servidor ainda, ou rede caiu.
+		// A coleta normal não depende disto.
+		return
+	}
+	fs := cmds.PendingFullSync
+	if fs == nil {
+		return
+	}
+	note := "disparado pela web"
+	if fs.FromUnix > 0 || fs.ToUnix > 0 {
+		note = "disparado pela web (período)"
+	}
+	c.log.Infof("comando do Thera: full-sync (startId=%d, período %d..%d) — iniciando", fs.StartID, fs.FromUnix, fs.ToUnix)
+	go func() {
+		if _, err := c.FullSync(ctx, fs.StartID, fs.FromUnix, fs.ToUnix, note); err != nil {
+			c.log.Errorf("full-sync (disparado pela web) terminou com erro: %v", err)
+		}
+	}()
 }
 
 // checkUpdate roda a checagem de auto-update (best-effort). Devolve true se um

@@ -96,10 +96,12 @@ func fakeDevice(t *testing.T, logs []fakeLog, regByUser map[string]string) *http
 
 // fakeThera captura todos os /dao recebidos.
 type fakeThera struct {
-	srv   *httptest.Server
-	mu    sync.Mutex
-	dao   []map[string]string // id -> time, por envio (lista de values)
-	calls int                 // nº de REQUISIÇÕES /dao (p/ provar o batelamento)
+	srv      *httptest.Server
+	mu       sync.Mutex
+	dao      []map[string]string // id -> time, por envio (lista de values)
+	calls    int                 // nº de REQUISIÇÕES /dao (p/ provar o batelamento)
+	pending  string              // JSON do pendingFullSync servido em /commands (read-once)
+	cmdReads int                 // nº de leituras de /commands
 }
 
 func newFakeThera() *fakeThera {
@@ -122,9 +124,28 @@ func newFakeThera() *fakeThera {
 			_, _ = w.Write([]byte(`{"ok":true}`))
 			return
 		}
+		if strings.HasSuffix(r.URL.Path, "/commands") {
+			ft.mu.Lock()
+			ft.cmdReads++
+			p := ft.pending
+			ft.pending = "" // read-once
+			ft.mu.Unlock()
+			if p == "" {
+				_, _ = w.Write([]byte(`{"pendingFullSync":null}`))
+			} else {
+				_, _ = w.Write([]byte(`{"pendingFullSync":` + p + `}`))
+			}
+			return
+		}
 		w.WriteHeader(200)
 	}))
 	return ft
+}
+
+func (ft *fakeThera) setPending(json string) {
+	ft.mu.Lock()
+	ft.pending = json
+	ft.mu.Unlock()
 }
 
 func (ft *fakeThera) sent() []map[string]string {
@@ -288,6 +309,53 @@ func TestFullSyncBatchesAndFiltersPeriod(t *testing.T) {
 	// Modo período NÃO mexe no cursor incremental (é um recorte do passado).
 	if st.Get().Cursor != 0 {
 		t.Errorf("cursor incremental não deveria avançar no modo período, veio %d", st.Get().Cursor)
+	}
+}
+
+// TestQueuedFullSyncFromWebRunsWithPeriod prova o disparo PELA WEB: o coletor lê
+// o comando pendente em /commands e roda o full-sync com o período pedido.
+func TestQueuedFullSyncFromWebRunsWithPeriod(t *testing.T) {
+	logs := []fakeLog{
+		{ID: 1, Time: "1700000001", User: "100"}, // fora (antes)
+		{ID: 2, Time: "1700000200", User: "100"}, // DENTRO
+		{ID: 3, Time: "1700000300", User: "100"}, // DENTRO
+		{ID: 4, Time: "1700000400", User: "100"}, // fora (depois)
+	}
+	dev := fakeDevice(t, logs, map[string]string{"100": "0001"})
+	defer dev.Close()
+	ft := newFakeThera()
+	defer ft.srv.Close()
+	c, _, _ := newTestCollector(t, dev.URL, ft.srv.URL)
+
+	// Comando enfileirado pela web: só o intervalo [150,350] → ids 2 e 3.
+	ft.setPending(`{"startId":0,"fromUnix":1700000150,"toUnix":1700000350}`)
+	c.maybeRunQueuedFullSync(context.Background())
+
+	// O full-sync roda em goroutine; espera concluir.
+	deadline := time.Now().Add(3 * time.Second)
+	for c.FullSyncRunning() || len(ft.sent()) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("full-sync disparado pela web não concluiu a tempo (enviados=%d)", len(ft.sent()))
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	sent := ft.sent()
+	got := map[string]bool{}
+	for _, v := range sent {
+		got[v["id"]] = true
+	}
+	if !got["2"] || !got["3"] || got["1"] || got["4"] || len(sent) != 2 {
+		t.Fatalf("esperava enviar só ids 2 e 3 (período), veio %+v", sent)
+	}
+	if ft.cmdReads == 0 {
+		t.Errorf("o coletor deveria ter lido /commands")
+	}
+	// Segunda checada: comando já foi consumido (read-once) → não dispara de novo.
+	c.lastCommandCheck = time.Time{} // libera o gate
+	c.maybeRunQueuedFullSync(context.Background())
+	time.Sleep(50 * time.Millisecond)
+	if len(ft.sent()) != 2 {
+		t.Errorf("comando read-once não deveria re-disparar; enviados=%d", len(ft.sent()))
 	}
 }
 

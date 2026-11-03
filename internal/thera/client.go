@@ -88,15 +88,47 @@ type DaoPayload struct {
 
 // Client encaminha payloads ao Thera.
 type Client struct {
-	daoURL  string
-	syncURL string
-	http    *http.Client
+	daoURL      string
+	syncURL     string
+	commandsURL string
+	http        *http.Client
 }
 
 // New cria um cliente Thera. daoURL é a URL completa do endpoint /dao.
 // httpClient deve ter timeout (internet).
 func New(daoURL string, httpClient *http.Client) *Client {
-	return &Client{daoURL: daoURL, syncURL: strings.TrimSuffix(daoURL, "/dao") + "/sync", http: httpClient}
+	base := strings.TrimSuffix(daoURL, "/dao")
+	return &Client{daoURL: daoURL, syncURL: base + "/sync", commandsURL: base + "/commands", http: httpClient}
+}
+
+// PendingFullSync é um comando de full-sync enfileirado no Thera (disparado pela
+// web). fromUnix/toUnix (epoch em SEGUNDOS; 0 = sem limite) recortam o período.
+type PendingFullSync struct {
+	StartID  int64 `json:"startId"`
+	FromUnix int64 `json:"fromUnix"`
+	ToUnix   int64 `json:"toUnix"`
+}
+
+// Commands é a resposta do endpoint /commands (polling de comandos on-demand).
+type Commands struct {
+	PendingFullSync *PendingFullSync `json:"pendingFullSync"`
+}
+
+// GetCommands consulta comandos pendentes (ex.: full-sync disparado pela web). O
+// servidor LIMPA o pendente na leitura (read-once), então um comando roda uma vez.
+func (c *Client) GetCommands(ctx context.Context) (Commands, error) {
+	var out Commands
+	data, status, err := c.request(ctx, http.MethodGet, c.commandsURL, nil, "")
+	if err != nil {
+		return out, err
+	}
+	if status < 200 || status >= 300 {
+		return out, fmt.Errorf("Thera /commands respondeu %d: %s", status, strings.TrimSpace(string(data)))
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return out, fmt.Errorf("resposta /commands inválida: %w", err)
+	}
+	return out, nil
 }
 
 // SyncUser é o cadastro desejado pelo Thera. FaceURL é temporária e só é
