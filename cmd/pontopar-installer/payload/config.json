@@ -7,6 +7,15 @@
   "theraBase": "https://pediuai-api.debita.ai/thera",
   "deviceSecret": "",
   "pollSeconds": 15,
+  "batchSize": 500,
+  "maxRetries": 4,
+  "retryBackoffSeconds": 2,
+  "registrationOverrides": {},
+  "ui": {
+    "enabled": true,
+    "port": 47114,
+    "bind": "127.0.0.1"
+  },
   "facial": {
     "enablePhotoUpload": true,
     "livenessMode": true,

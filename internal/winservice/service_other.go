@@ -45,5 +45,11 @@ func InstallAndStart(exePath string) error { return errNotWindows }
 // Stop não é suportado fora do Windows.
 func Stop() error { return errNotWindows }
 
+// SetAutoStart não é suportado fora do Windows.
+func SetAutoStart(enable bool) error { return errNotWindows }
+
+// IsAutoStart não é suportado fora do Windows.
+func IsAutoStart() (bool, error) { return false, errNotWindows }
+
 // Status não é suportado fora do Windows.
 func Status() (string, error) { return "", errNotWindows }

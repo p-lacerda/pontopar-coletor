@@ -23,14 +23,14 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
+	"github.com/p-lacerda/pontopar-coletor/internal/app"
 	"github.com/p-lacerda/pontopar-coletor/internal/applog"
-	"github.com/p-lacerda/pontopar-coletor/internal/collector"
+	"github.com/p-lacerda/pontopar-coletor/internal/audit"
 	"github.com/p-lacerda/pontopar-coletor/internal/config"
 	"github.com/p-lacerda/pontopar-coletor/internal/gui"
 	"github.com/p-lacerda/pontopar-coletor/internal/setup"
-	"github.com/p-lacerda/pontopar-coletor/internal/updater"
+	"github.com/p-lacerda/pontopar-coletor/internal/state"
 	"github.com/p-lacerda/pontopar-coletor/internal/winservice"
 )
 
@@ -131,8 +131,8 @@ func runGUI() {
 	}
 }
 
-// runService monta o coletor e o roda sob o SCM (interactive=false) ou em
-// foreground (interactive=true).
+// runService monta o supervisor (coletor + painel web + recarga a quente) e o
+// roda sob o SCM (interactive=false) ou em foreground (interactive=true).
 func runService(interactive bool) {
 	dir, err := config.ExeDir()
 	if err != nil {
@@ -144,37 +144,15 @@ func runService(interactive bool) {
 	logger := applog.Init(applog.DefaultPath(dir), interactive)
 	defer logger.Close()
 
-	cfg, err := config.Load(dir)
-	if err != nil {
-		logger.Errorf("erro de configuracao: %v", err)
-		// Sem config válida não há o que coletar; encerra.
-		os.Exit(1)
-	}
+	// Estado vivo (para o painel) e auditoria persistente (prova de completude).
+	st := state.New(dir, version)
+	au := audit.New(dir)
 
-	col := collector.New(cfg, dir, logger)
-
-	// Auto-update (opcional). Só configura se houver repo na config.
-	up, err := updater.New(cfg, version, logger)
-	if err != nil {
-		logger.Errorf("aviso: nao foi possivel iniciar o auto-update: %v", err)
-	}
-	if up != nil {
-		every := time.Duration(cfg.UpdateCheckHours()) * time.Hour
-		onUpdated := func(newVersion string) {
-			if interactive {
-				logger.Infof("nova versao %s baixada ao lado do exe; reinicie o processo para aplicar", newVersion)
-				return
-			}
-			// Como serviço: encerra com codigo !=0 para o SCM reiniciar o novo exe.
-			logger.Close()
-			up.RestartForUpdate()
-		}
-		col.SetUpdater(up, every, onUpdated)
-		logger.Infof("auto-update habilitado: repo=%s a cada %s", cfg.Update.Repo, every)
-	}
-
-	// A função de trabalho compartilhada entre serviço e foreground.
-	work := func(ctx context.Context) { col.Run(ctx) }
+	// O supervisor carrega a config, sobe o painel, roda o coletor e recarrega a
+	// quente quando a config muda. Config inválida não derruba o serviço: o painel
+	// sobe para o operador corrigir e salvar.
+	sup := app.NewSupervisor(dir, version, interactive, logger, st, au)
+	work := func(ctx context.Context) { sup.Run(ctx) }
 
 	if interactive {
 		// Foreground: roda direto com um contexto de fundo (Ctrl+C encerra o

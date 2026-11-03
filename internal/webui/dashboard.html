@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="pontopar-token" content="{{TOKEN}}">
+<title>PontoPar Coletor — Painel</title>
+<style>
+  :root{
+    --bg:#0f1420; --panel:#171e2e; --panel2:#1e2740; --line:#2a344e;
+    --text:#e7ecf6; --muted:#9aa7c2; --accent:#4f8cff; --accent2:#2f6bd6;
+    --ok:#36c08a; --bad:#ff6b6b; --warn:#f2b84b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45}
+  header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    padding:14px 20px;background:linear-gradient(180deg,#141b2b,#10151f);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+  header h1{font-size:17px;margin:0;font-weight:650;letter-spacing:.2px}
+  header .ver{color:var(--muted);font-size:12px}
+  .spacer{flex:1}
+  .badge{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border-radius:20px;
+    background:var(--panel2);border:1px solid var(--line);font-size:12.5px;font-weight:600}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--muted)}
+  .dot.on{background:var(--ok);box-shadow:0 0 8px #36c08a88}
+  .dot.off{background:var(--bad);box-shadow:0 0 8px #ff6b6b88}
+  main{max-width:1180px;margin:0 auto;padding:20px;display:grid;gap:18px}
+  .grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(210px,1fr))}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .card h3{margin:0 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600}
+  .card .big{font-size:24px;font-weight:700}
+  .card .sub{color:var(--muted);font-size:12px;margin-top:3px;word-break:break-all}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+  .panel>h2{margin:0 0 14px;font-size:15px;font-weight:650;display:flex;align-items:center;gap:9px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  label{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}
+  input,select,textarea{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--text);
+    border-radius:8px;padding:9px 11px;font-size:13.5px;font-family:inherit}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
+  textarea{min-height:76px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
+  .formgrid{display:grid;gap:12px 16px;grid-template-columns:repeat(auto-fill,minmax(230px,1fr))}
+  .field{min-width:0}
+  button{background:var(--accent);color:#fff;border:0;border-radius:9px;padding:10px 16px;
+    font-size:13.5px;font-weight:650;cursor:pointer}
+  button:hover{background:var(--accent2)}
+  button.ghost{background:var(--panel2);border:1px solid var(--line);color:var(--text)}
+  button.ghost:hover{background:#28324e}
+  button.danger{background:#3a2330;border:1px solid #6b3450;color:#ffb3c7}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .hint{color:var(--muted);font-size:12px}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  .pill{padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700}
+  .pill.full{background:#1e3a5f;color:#9cc4ff}
+  .pill.incremental{background:#243b2f;color:#8fe0b8}
+  .pill.err{background:#4a2330;color:#ff9db0}
+  pre.log{background:#0b1019;border:1px solid var(--line);border-radius:10px;padding:12px;
+    height:300px;overflow:auto;font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#c7d2e8;margin:0;white-space:pre-wrap;word-break:break-word}
+  .toast{position:fixed;right:18px;bottom:18px;background:var(--panel2);border:1px solid var(--line);
+    border-radius:10px;padding:12px 16px;max-width:360px;box-shadow:0 10px 30px #0008;opacity:0;transform:translateY(8px);
+    transition:.2s;pointer-events:none;z-index:50}
+  .toast.show{opacity:1;transform:none}
+  .toast.ok{border-color:#2a6b52}.toast.bad{border-color:#6b2a37}
+  .switch{position:relative;display:inline-block;width:46px;height:26px}
+  .switch input{display:none}
+  .slider{position:absolute;inset:0;background:var(--panel2);border:1px solid var(--line);border-radius:20px;transition:.2s;cursor:pointer}
+  .slider:before{content:"";position:absolute;width:18px;height:18px;left:3px;top:3px;background:#cdd6ea;border-radius:50%;transition:.2s}
+  .switch input:checked + .slider{background:var(--ok)}
+  .switch input:checked + .slider:before{transform:translateX(20px);background:#fff}
+  .muted{color:var(--muted)}
+  .warnbox{background:#2a2410;border:1px solid #5a4a16;color:#f2d894;border-radius:9px;padding:10px 13px;font-size:12.5px;margin-top:10px}
+  code{background:var(--panel2);padding:1px 6px;border-radius:5px;font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>PontoPar Coletor</h1><span class="ver" id="ver">{{VERSION}}</span>
+  <div class="spacer"></div>
+  <span class="badge"><span class="dot" id="dotDevice"></span>Control iD</span>
+  <span class="badge"><span class="dot" id="dotThera"></span>Thera</span>
+  <span class="badge" id="svcBadge">serviço: —</span>
+</header>
+
+<main>
+  <!-- STATUS -->
+  <section class="grid" id="cards">
+    <div class="card"><h3>Cursor (último id)</h3><div class="big" id="cCursor">—</div><div class="sub">máximo visto: <span id="cMax">—</span></div></div>
+    <div class="card"><h3>Batidas enviadas</h3><div class="big" id="cFwd">—</div><div class="sub">desde o início do processo</div></div>
+    <div class="card"><h3>Recusadas s/ horário</h3><div class="big" id="cSkip">—</div><div class="sub">nunca enviadas (anti-colapso)</div></div>
+    <div class="card"><h3>Erros</h3><div class="big" id="cErr">—</div><div class="sub" id="cErrMsg">—</div></div>
+    <div class="card"><h3>Última batida</h3><div class="big" id="cSync">—</div><div class="sub" id="cTick">—</div></div>
+    <div class="card"><h3>Usuários/faces</h3><div class="big" id="cUsers">—</div><div class="sub" id="cUserSync">—</div></div>
+  </section>
+
+  <!-- FULL SYNC -->
+  <section class="panel">
+    <h2>Consultar o Control iD completo (full-sync)</h2>
+    <p class="hint">Puxa TODO o histórico de batidas do aparelho de uma vez, em ordem, carregando o horário real de cada evento. É seguro repetir (o Thera deduplica por aparelho+id+hora) e retomável se for interrompido. Use para recuperar tudo de forma confiável, sem receber "por partes".</p>
+    <div class="row" style="margin-top:12px">
+      <div class="field" style="max-width:180px"><label>Começar a partir do id</label><input id="fsStart" type="number" value="0" min="0"></div>
+      <button id="btnFull">Consultar completo</button>
+      <button class="ghost" id="btnFullResume">Retomar interrompido</button>
+      <span class="hint" id="fsState"></span>
+    </div>
+    <div class="warnbox" id="fsBox" style="display:none"></div>
+  </section>
+
+  <!-- CONFIG -->
+  <section class="panel">
+    <h2>Configuração</h2>
+    <div class="formgrid">
+      <div class="field"><label>IP do Control iD</label><input id="deviceIp"></div>
+      <div class="field"><label>Porta web</label><input id="devicePort" type="number"></div>
+      <div class="field"><label>Usuário</label><input id="login"></div>
+      <div class="field"><label>Senha</label><input id="password" type="password"></div>
+      <div class="field"><label>ID do aparelho no Thera</label><input id="deviceId"></div>
+      <div class="field"><label>Endereço do Thera (theraBase)</label><input id="theraBase"></div>
+      <div class="field"><label>Segredo do Thera</label><input id="deviceSecret" type="password"></div>
+      <div class="field"><label>Verificar a cada (s)</label><input id="pollSeconds" type="number"></div>
+      <div class="field"><label>Tamanho do lote (batchSize)</label><input id="batchSize" type="number"></div>
+      <div class="field"><label>Retentativas por batida</label><input id="maxRetries" type="number"></div>
+      <div class="field"><label>Backoff base (s)</label><input id="retryBackoffSeconds" type="number"></div>
+      <div class="field"><label>Porta do painel (ui.port)</label><input id="uiPort" type="number"></div>
+      <div class="field"><label>Distância da face (cm)</label><input id="idDist" type="number"></div>
+      <div class="field"><label>Modo do terminal</label><select id="terminalMode"><option value="attendance">attendance (ponto)</option><option value="access">access (acesso)</option></select></div>
+      <div class="field"><label>Liveness rigoroso</label><select id="liveness"><option value="1">sim</option><option value="0">não</option></select></div>
+      <div class="field"><label>Limitar à região da tela</label><select id="region"><option value="1">sim</option><option value="0">não</option></select></div>
+      <div class="field"><label>Enviar foto da batida</label><select id="photo"><option value="1">sim</option><option value="0">não</option></select></div>
+    </div>
+    <div class="field" style="margin-top:12px">
+      <label>Mapeamento manual user_id → matrícula (JSON). Tem prioridade sobre o aparelho. Ex.: <code>{"900000004":"12","900000006":"34"}</code></label>
+      <textarea id="overrides">{}</textarea>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button id="btnSave">Salvar configuração</button>
+      <button class="ghost" id="btnTestDevice">Testar Control iD</button>
+      <button class="ghost" id="btnTestThera">Testar Thera</button>
+      <span class="hint">Salvar aplica em poucos segundos (o coletor recarrega sozinho).</span>
+    </div>
+  </section>
+
+  <!-- SERVIÇO / AUTOSTART -->
+  <section class="panel">
+    <h2>Serviço do Windows</h2>
+    <div class="row">
+      <label class="switch"><input type="checkbox" id="autostart"><span class="slider"></span></label>
+      <span>Iniciar com o Windows</span>
+      <div class="spacer"></div>
+      <button class="ghost" id="btnStart">Iniciar serviço</button>
+      <button class="danger" id="btnStop">Parar serviço</button>
+    </div>
+    <p class="hint" id="svcHint" style="margin-bottom:0;margin-top:12px"></p>
+  </section>
+
+  <!-- LOG -->
+  <section class="panel">
+    <h2>Log ao vivo <span class="hint" style="font-weight:400">(atualiza sozinho)</span></h2>
+    <pre class="log" id="log">…</pre>
+  </section>
+
+  <!-- AUDITORIA -->
+  <section class="panel">
+    <h2>Auditoria de sincronizações <a class="hint" href="/api/audit.csv" style="margin-left:8px">⬇ exportar CSV</a></h2>
+    <p class="hint">Cada linha é um run: a faixa de ids varrida, quantas batidas foram lidas/enviadas, quantas foram recusadas por falta de horário, e se a drenagem foi verificada como completa. É a prova de completude.</p>
+    <div style="overflow:auto;margin-top:10px">
+      <table>
+        <thead><tr><th>quando</th><th>modo</th><th>de id</th><th>até id</th><th class="num">lidas</th><th class="num">enviadas</th><th class="num">s/ horário</th><th class="num">id inválido</th><th class="num">lacuna</th><th>verif.</th><th>erro</th></tr></thead>
+        <tbody id="auditBody"><tr><td colspan="11" class="muted">carregando…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const TOKEN = document.querySelector('meta[name=pontopar-token]').content;
+const $ = id => document.getElementById(id);
+
+function toast(msg, ok=true){ const t=$('toast'); t.textContent=msg; t.className='toast show '+(ok?'ok':'bad');
+  setTimeout(()=>{t.className='toast '+(ok?'ok':'bad');}, 3200); }
+
+async function api(path, opts={}){ opts.headers = Object.assign({'X-PontoPar-Token':TOKEN,'Content-Type':'application/json'}, opts.headers||{});
+  const r = await fetch(path, opts); if(!r.ok){ throw new Error((await r.text())||('HTTP '+r.status)); }
+  const ct=r.headers.get('content-type')||''; return ct.includes('json')? r.json(): r.text(); }
+
+function ago(ts){ if(!ts||ts.startsWith('0001'))return '—'; const d=new Date(ts); const s=Math.floor((Date.now()-d)/1000);
+  if(s<0)return 'agora'; if(s<60)return s+'s atrás'; if(s<3600)return Math.floor(s/60)+'min atrás'; if(s<86400)return Math.floor(s/3600)+'h atrás'; return Math.floor(s/86400)+'d atrás'; }
+function hhmm(ts){ if(!ts||ts.startsWith('0001'))return '—'; return new Date(ts).toLocaleString('pt-BR'); }
+
+let fullRunning=false;
+async function refreshStatus(){
+  try{
+    const d = await api('/api/status'); const s=d.state;
+    $('dotDevice').className='dot '+(s.deviceOnline?'on':'off');
+    $('dotThera').className='dot '+(s.theraOnline?'on':'off');
+    $('svcBadge').textContent='serviço: '+(d.service||'—');
+    $('cCursor').textContent=s.cursor??'—'; $('cMax').textContent=s.maxDeviceId??'—';
+    $('cFwd').textContent=s.forwardedTotal??0; $('cSkip').textContent=s.skippedNoTime??0;
+    $('cErr').textContent=s.errorCount??0; $('cErrMsg').textContent=s.lastError? (s.lastError.slice(0,80)) : 'sem erros';
+    $('cSync').textContent=ago(s.lastSyncAt); $('cTick').textContent='último ciclo: '+ago(s.lastTickAt);
+    $('cUsers').textContent=s.usersObserved??'—'; $('cUserSync').textContent='sincronizado '+ago(s.lastUserSyncAt);
+    // full-sync
+    fullRunning=s.fullSyncRunning;
+    $('btnFull').disabled=fullRunning; $('btnFullResume').disabled=fullRunning;
+    if(fullRunning){ $('fsState').textContent='rodando… id '+s.fullSyncCurrentId+' · '+s.fullSyncForwarded+' enviadas / '+s.fullSyncReadTotal+' lidas'; }
+    else if(s.fullSyncLastResult){ $('fsState').textContent='último: '+s.fullSyncLastResult+' ('+ago(s.fullSyncLastAt)+')'; }
+    // autostart
+    const cb=$('autostart'); cb.disabled=!d.autostartKnown; cb.checked=!!d.autostart;
+    $('svcHint').textContent=d.autostartKnown? '' : 'Serviço não instalado nesta máquina (ou rodando fora do Windows). Instale pelo PontoPar-Setup para habilitar início automático.';
+  }catch(e){ /* painel segue; coleta nunca depende dele */ }
+}
+
+async function refreshLog(){ try{ $('log').textContent = await api('/api/log?bytes=24000'); $('log').scrollTop=$('log').scrollHeight; }catch(e){} }
+
+async function refreshAudit(){
+  try{
+    const recs = await api('/api/audit?n=60'); const tb=$('auditBody'); tb.innerHTML='';
+    if(!recs||!recs.length){ tb.innerHTML='<tr><td colspan="11" class="muted">nenhum sync registrado ainda</td></tr>'; return; }
+    for(const r of recs){
+      const cls = r.error? 'err' : (r.mode==='full'?'full':'incremental');
+      const tr=document.createElement('tr');
+      tr.innerHTML=`<td>${hhmm(r.time)}</td><td><span class="pill ${cls}">${r.mode}</span></td>
+        <td class="num">${r.fromId}</td><td class="num">${r.toId}</td>
+        <td class="num">${r.read||0}</td><td class="num">${r.forwarded||0}</td>
+        <td class="num">${r.skippedNoTime||0}</td><td class="num">${r.skippedBadId||0}</td>
+        <td class="num">${r.rotatedGap||0}</td><td>${r.verified?'✓':'—'}</td>
+        <td class="muted">${r.error? r.error.slice(0,40):''}</td>`;
+      tb.appendChild(tr);
+    }
+  }catch(e){}
+}
+
+// ---- config ----
+async function loadConfig(){
+  const c = await api('/api/config');
+  window._cfg=c;
+  $('deviceIp').value=c.deviceIp||''; $('devicePort').value=c.devicePort||80; $('login').value=c.login||'';
+  $('password').value=c.password||''; $('deviceId').value=c.deviceId||''; $('theraBase').value=c.theraBase||'';
+  $('deviceSecret').value=c.deviceSecret||''; $('pollSeconds').value=c.pollSeconds||15;
+  $('batchSize').value=c.batchSize||500; $('maxRetries').value=(c.maxRetries??4); $('retryBackoffSeconds').value=(c.retryBackoffSeconds||2);
+  $('uiPort').value=(c.ui&&c.ui.port)||47114;
+  const f=c.facial||{}; $('idDist').value=f.identificationDistanceCm||50;
+  $('terminalMode').value=f.terminalMode||'attendance';
+  $('liveness').value=f.livenessMode?'1':'0'; $('region').value=f.limitDisplayRegion?'1':'0'; $('photo').value=f.enablePhotoUpload?'1':'0';
+  $('overrides').value=JSON.stringify(c.registrationOverrides||{},null,0);
+}
+async function saveConfig(){
+  const c = Object.assign({}, window._cfg||{});
+  c.deviceIp=$('deviceIp').value.trim(); c.devicePort=+$('devicePort').value; c.login=$('login').value.trim();
+  c.password=$('password').value; c.deviceId=$('deviceId').value.trim(); c.theraBase=$('theraBase').value.trim();
+  c.deviceSecret=$('deviceSecret').value.trim(); c.pollSeconds=+$('pollSeconds').value;
+  c.batchSize=+$('batchSize').value; c.maxRetries=+$('maxRetries').value; c.retryBackoffSeconds=+$('retryBackoffSeconds').value;
+  c.ui=Object.assign({}, c.ui||{}, {port:+$('uiPort').value});
+  c.facial=Object.assign({}, c.facial||{}, {
+    identificationDistanceCm:+$('idDist').value, terminalMode:$('terminalMode').value,
+    livenessMode:$('liveness').value==='1', limitDisplayRegion:$('region').value==='1', enablePhotoUpload:$('photo').value==='1' });
+  try{ c.registrationOverrides = JSON.parse($('overrides').value||'{}'); }
+  catch(e){ toast('Mapeamento manual não é um JSON válido', false); return; }
+  try{ await api('/api/config',{method:'POST',body:JSON.stringify(c)}); window._cfg=c; toast('Configuração salva. Aplicando…'); }
+  catch(e){ toast('Não salvou: '+e.message, false); }
+}
+
+// ---- actions ----
+$('btnSave').onclick=saveConfig;
+$('btnTestDevice').onclick=async()=>{ try{ const r=await api('/api/test-device',{method:'POST'}); toast(r.ok?'Control iD respondeu ✓':'Falhou: '+r.error, r.ok);}catch(e){toast(e.message,false);} };
+$('btnTestThera').onclick=async()=>{ try{ const r=await api('/api/test-thera',{method:'POST'}); toast(r.ok?'Thera respondeu ✓':'Falhou: '+r.error, r.ok);}catch(e){toast(e.message,false);} };
+$('btnFull').onclick=async()=>{ const s=+$('fsStart').value||0; try{ await api('/api/fullsync',{method:'POST',body:JSON.stringify({startId:s})}); toast('Full-sync iniciado'); refreshStatus();}catch(e){toast(e.message,false);} };
+$('btnFullResume').onclick=async()=>{ try{ await api('/api/fullsync',{method:'POST',body:JSON.stringify({startId:-1})}); toast('Retomando full-sync');refreshStatus();}catch(e){toast(e.message,false);} };
+$('autostart').onchange=async(e)=>{ try{ await api('/api/autostart',{method:'POST',body:JSON.stringify({enabled:e.target.checked})}); toast('Início automático: '+(e.target.checked?'ligado':'desligado'));}catch(err){toast(err.message,false);e.target.checked=!e.target.checked;} };
+$('btnStart').onclick=async()=>{ try{ await api('/api/service/start',{method:'POST'}); toast('Serviço iniciado');refreshStatus();}catch(e){toast(e.message,false);} };
+$('btnStop').onclick=async()=>{ if(!confirm('Parar a coleta? O serviço deixa de receber batidas até ser iniciado de novo.'))return; try{ await api('/api/service/stop',{method:'POST'}); toast('Serviço parado');refreshStatus();}catch(e){toast(e.message,false);} };
+
+loadConfig().catch(e=>toast('Não carregou config: '+e.message,false));
+refreshStatus(); refreshLog(); refreshAudit();
+setInterval(refreshStatus, 2000);
+setInterval(refreshLog, 3000);
+setInterval(refreshAudit, 8000);
+</script>
+</body>
+</html>

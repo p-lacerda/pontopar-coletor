@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // UpdateConfig controla o auto-update via GitHub Releases.
@@ -70,18 +71,45 @@ func (f *flexInt64) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// UIConfig controla o painel web local (localhost) de status/configuração.
+type UIConfig struct {
+	// Enabled liga/desliga o painel. Default: ligado.
+	Enabled *bool `json:"enabled"`
+	// Port é a porta do painel em 127.0.0.1. Default 47114.
+	Port int `json:"port"`
+	// Bind é o endereço de escuta. SEMPRE loopback por segurança; expor em
+	// 0.0.0.0 abriria o painel para a rede inteira. Default 127.0.0.1.
+	Bind string `json:"bind"`
+}
+
 // Config espelha o config.json.
 type Config struct {
-	DeviceIp     string       `json:"deviceIp"`
-	DevicePort   int          `json:"devicePort"` // default 80
-	Login        string       `json:"login"`
-	Password     string       `json:"password"`
-	DeviceId     flexInt64    `json:"deviceId"`     // fallback quando o access_log não traz device_id
-	DeviceSecret string       `json:"deviceSecret"` // vai na URL do /dao do Thera
-	TheraBase    string       `json:"theraBase"`
-	PollSeconds  int          `json:"pollSeconds"` // default 15
-	Update       UpdateConfig `json:"update"`
-	Facial       FacialConfig `json:"facial"`
+	DeviceIp     string    `json:"deviceIp"`
+	DevicePort   int       `json:"devicePort"` // default 80
+	Login        string    `json:"login"`
+	Password     string    `json:"password"`
+	DeviceId     flexInt64 `json:"deviceId"`     // fallback quando o access_log não traz device_id
+	DeviceSecret string    `json:"deviceSecret"` // vai na URL do /dao do Thera
+	TheraBase    string    `json:"theraBase"`
+	PollSeconds  int       `json:"pollSeconds"` // default 15
+	// BatchSize é o tamanho da página pedida ao aparelho em cada load_objects de
+	// access_logs. Default 500. Entre 1 e 1000.
+	BatchSize int `json:"batchSize"`
+	// MaxRetries é quantas vezes uma MESMA batida é reenviada ao Thera dentro do
+	// ciclo antes de desistir (e reprocessar no próximo tick). 0 = sem retry extra
+	// (o loop normal já reprocessa). Default 4.
+	MaxRetries int `json:"maxRetries"`
+	// RetryBackoffSeconds é a base do backoff exponencial entre tentativas de
+	// reenvio. Default 2s (2s, 4s, 8s, ... limitado a 30s).
+	RetryBackoffSeconds int `json:"retryBackoffSeconds"`
+	// RegistrationOverrides mapeia user_id (interno do aparelho, string) ->
+	// matrícula, para forçar a tradução quando o usuário no aparelho não tem o
+	// campo registration preenchido corretamente. Tem PRIORIDADE sobre o de-para
+	// lido do aparelho.
+	RegistrationOverrides map[string]string `json:"registrationOverrides,omitempty"`
+	Update                UpdateConfig      `json:"update"`
+	Facial                FacialConfig      `json:"facial"`
+	UI                    UIConfig          `json:"ui"`
 }
 
 // Default devolve uma configuração inicial segura para a interface. Ela não
@@ -89,10 +117,13 @@ type Config struct {
 // antes de iniciar o serviço. Isso permite abrir o programa recém-baixado sem
 // depender de um config.json externo.
 func Default() *Config {
+	enabled := true
 	return &Config{DeviceIp: "192.168.1.111", DevicePort: 90, Login: "admin", DeviceId: flexInt64(4409419584542362), PollSeconds: 15,
+		BatchSize: 500, MaxRetries: 4, RetryBackoffSeconds: 2,
 		TheraBase: "https://pediuai-api.debita.ai/thera",
 		Facial:    FacialConfig{EnablePhotoUpload: true, LivenessMode: true, LimitDisplayRegion: true, IdentificationDistanceCm: 50, TerminalMode: "attendance"},
-		Update:    UpdateConfig{Repo: "p-lacerda/pontopar-coletor", CheckHours: 6}}
+		Update:    UpdateConfig{Repo: "p-lacerda/pontopar-coletor", CheckHours: 6},
+		UI:        UIConfig{Enabled: &enabled, Port: 47114, Bind: "127.0.0.1"}}
 }
 
 // Port devolve a porta do device (default 80).
@@ -136,6 +167,63 @@ func (c *Config) UpdateCheckHours() int {
 		return 6
 	}
 	return c.Update.CheckHours
+}
+
+// BatchSizeOr devolve o tamanho de lote (default 500, limitado a 1..1000).
+func (c *Config) BatchSizeOr() int {
+	if c.BatchSize <= 0 {
+		return 500
+	}
+	if c.BatchSize > 1000 {
+		return 1000
+	}
+	return c.BatchSize
+}
+
+// MaxRetriesOr devolve o número de retentativas por batida (default 4).
+func (c *Config) MaxRetriesOr() int {
+	if c.MaxRetries < 0 {
+		return 0
+	}
+	if c.MaxRetries == 0 {
+		return 4
+	}
+	return c.MaxRetries
+}
+
+// RetryBackoffBase devolve a base do backoff entre retentativas (default 2s).
+func (c *Config) RetryBackoffBase() time.Duration {
+	s := c.RetryBackoffSeconds
+	if s <= 0 {
+		s = 2
+	}
+	return time.Duration(s) * time.Second
+}
+
+// UIEnabled diz se o painel web local está ligado (default: ligado).
+func (c *Config) UIEnabled() bool {
+	if c.UI.Enabled == nil {
+		return true
+	}
+	return *c.UI.Enabled
+}
+
+// UIPort devolve a porta do painel (default 47114).
+func (c *Config) UIPort() int {
+	if c.UI.Port <= 0 || c.UI.Port > 65535 {
+		return 47114
+	}
+	return c.UI.Port
+}
+
+// UIBind devolve o endereço de escuta do painel. Força loopback por segurança:
+// um painel administrativo nunca pode ficar exposto para a rede.
+func (c *Config) UIBind() string {
+	b := strings.TrimSpace(c.UI.Bind)
+	if b == "" || b == "0.0.0.0" || b == "::" {
+		return "127.0.0.1"
+	}
+	return b
 }
 
 // ExeDir devolve o diretório onde o executável está, resolvendo symlinks.
@@ -246,6 +334,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Facial.TerminalMode != "" && c.Facial.TerminalMode != "attendance" && c.Facial.TerminalMode != "access" {
 		return fmt.Errorf("terminalMode deve ser attendance ou access")
+	}
+	if c.BatchSize != 0 && (c.BatchSize < 1 || c.BatchSize > 1000) {
+		return fmt.Errorf("batchSize deve estar entre 1 e 1000")
+	}
+	if c.UI.Port != 0 && (c.UI.Port < 1 || c.UI.Port > 65535) {
+		return fmt.Errorf("ui.port deve estar entre 1 e 65535")
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("config.json incompleto, faltam campos: %s", strings.Join(missing, ", "))

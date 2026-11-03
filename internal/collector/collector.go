@@ -6,19 +6,30 @@
 // timeouts HTTP separados (device LAN vs Thera internet), cursor atômico,
 // diretório-base = os.Executable(), parse defensivo de id, e ctx em tudo para
 // shutdown limpo quando o SCM do Windows mandar parar.
+//
+// TRAVA ANTI-CORRUPÇÃO DE HORÁRIO (motivo da reescrita): o bug histórico foi um
+// replay em massa que CARIMBOU dezenas de pessoas no MESMO segundo porque as
+// batidas perderam o `time` real durante o reenvio em lote. O backend deriva o
+// `punchedAt` E a chave de dedupe do campo `time`; uma batida sem `time` vira um
+// carimbo "agora" e colapsa vários eventos num segundo só. Por isso o coletor
+// AGORA RECUSA (nunca envia) qualquer batida sem `time` válido e AUDITA cada run.
 package collector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/p-lacerda/pontopar-coletor/internal/audit"
 	"github.com/p-lacerda/pontopar-coletor/internal/config"
 	"github.com/p-lacerda/pontopar-coletor/internal/idface"
+	"github.com/p-lacerda/pontopar-coletor/internal/state"
 	"github.com/p-lacerda/pontopar-coletor/internal/store"
 	"github.com/p-lacerda/pontopar-coletor/internal/thera"
 )
@@ -37,7 +48,28 @@ type Logger interface {
 const (
 	deviceHTTPTimeout = 15 * time.Second // LAN: curto
 	theraHTTPTimeout  = 30 * time.Second // internet: um pouco maior
+	maxRetryBackoff   = 30 * time.Second // teto do backoff entre retentativas
 )
+
+// fullSyncCursorFile é o cursor SEPARADO que torna o full-sync retomável sem
+// mexer no cursor.json da coleta incremental.
+const fullSyncCursorFile = "fullsync.json"
+
+// validUnixTime valida o `time` de um access_log. Rejeita vazio, "0", negativo e
+// não-numérico — exatamente os casos que fariam o backend carimbar "agora" e
+// colapsar horários. Um epoch em segundos ou milissegundos (ambos > 0) passa; o
+// backend já distingue segundos de ms.
+func validUnixTime(s string) (int64, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
+}
 
 // UpdateHook abstrai o auto-update, para o loop poder checar novas versões
 // periodicamente sem acoplar o coletor ao pacote updater. É opcional (nil
@@ -64,6 +96,17 @@ type Collector struct {
 	thera  *thera.Client
 	cursor *store.Cursor
 
+	st *state.State // estado vivo para a UI (pode ser nil em testes simples)
+	au *audit.Log   // auditoria persistente (pode ser nil em testes simples)
+
+	batchSize  int
+	maxRetries int
+	retryBase  time.Duration
+	overrides  map[string]string // user_id -> matrícula (prioridade sobre o device)
+
+	fullCursor      *store.Cursor
+	fullSyncRunning atomic.Bool
+
 	updater        UpdateHook
 	updateEvery    time.Duration
 	onUpdated      OnUpdatedFunc
@@ -74,23 +117,35 @@ type Collector struct {
 }
 
 // New monta um coletor a partir da config e do diretório-base (onde ficam
-// config.json/cursor.json/log).
-func New(cfg *config.Config, dir string, log Logger) *Collector {
+// config.json/cursor.json/log). st e au são opcionais (nil desliga estado/auditoria).
+func New(cfg *config.Config, dir string, log Logger, st *state.State, au *audit.Log) *Collector {
 	deviceHTTP := &http.Client{Timeout: deviceHTTPTimeout}
 	theraHTTP := &http.Client{Timeout: theraHTTPTimeout}
 
-	return &Collector{
-		cfg:       cfg,
-		dir:       dir,
-		log:       log,
-		device:    idface.New(cfg.DeviceBase(), cfg.Login, cfg.Password, deviceHTTP, log),
-		thera:     thera.New(cfg.TheraDaoURL(), theraHTTP),
-		cursor:    store.NewCursor(dir),
-		syncEvery: 5 * time.Minute,
+	c := &Collector{
+		cfg:        cfg,
+		dir:        dir,
+		log:        log,
+		device:     idface.New(cfg.DeviceBase(), cfg.Login, cfg.Password, deviceHTTP, log),
+		thera:      thera.New(cfg.TheraDaoURL(), theraHTTP),
+		cursor:     store.NewCursor(dir),
+		fullCursor: store.NewNamedCursor(dir, fullSyncCursorFile),
+		st:         st,
+		au:         au,
+		batchSize:  cfg.BatchSizeOr(),
+		maxRetries: cfg.MaxRetriesOr(),
+		retryBase:  cfg.RetryBackoffBase(),
+		overrides:  cfg.RegistrationOverrides,
+		syncEvery:  5 * time.Minute,
 		// Mantém o relógio do terminal alinhado mesmo depois de uma troca de
 		// horário no Windows. A chamada é pequena e best-effort.
 		clockSyncEvery: 5 * time.Minute,
 	}
+	if st != nil {
+		st.SetEndpoints(cfg.DeviceBase(), cfg.TheraBase)
+		st.SetCursor(c.cursor.Get())
+	}
+	return c
 }
 
 // SetUpdater habilita o auto-update no loop. every é o intervalo entre
@@ -102,29 +157,95 @@ func (c *Collector) SetUpdater(hook UpdateHook, every time.Duration, onUpdated O
 	c.onUpdated = onUpdated
 }
 
-// tick executa um ciclo de coleta DRENANDO TODO O BACKLOG: garante a sessão e
-// então processa lotes repetidamente enquanto houver batidas represadas.
+// registrationFor devolve a matrícula de um user_id. Um override local (config)
+// tem PRIORIDADE sobre o de-para lido do aparelho — assim o operador conserta um
+// usuário sem `registration` correto sem precisar mexer no cadastro do device.
+func (c *Collector) registrationFor(userId string) string {
+	if c.overrides != nil {
+		if reg, ok := c.overrides[strings.TrimSpace(userId)]; ok {
+			reg = strings.TrimSpace(reg)
+			if reg != "" {
+				return reg
+			}
+		}
+	}
+	return c.device.Registration(userId)
+}
+
+// deviceOK/deviceFail/theraOK/theraFail atualizam o estado (no-op se st==nil).
+func (c *Collector) deviceOK() {
+	if c.st != nil {
+		c.st.DeviceOK()
+	}
+}
+func (c *Collector) deviceFail(err error) {
+	if c.st != nil {
+		c.st.DeviceFail(err.Error())
+	}
+}
+func (c *Collector) theraOK() {
+	if c.st != nil {
+		c.st.TheraOK()
+	}
+}
+func (c *Collector) theraFail(err error) {
+	if c.st != nil {
+		c.st.TheraFail(err.Error())
+	}
+}
+
+// writeAudit anexa um record (no-op se au==nil).
+func (c *Collector) writeAudit(r audit.Record) {
+	if c.au == nil {
+		return
+	}
+	if err := c.au.Append(r); err != nil {
+		c.log.Errorf("falha ao gravar auditoria: %v", err)
+	}
+}
+
+// drainResult acumula o que um ciclo de drenagem leu/enviou/pulou, para a
+// auditoria e o estado.
+type drainResult struct {
+	read          int
+	forwarded     int
+	skippedNoTime int
+	skippedBadID  int
+	firstID       int64
+	lastID        int64
+}
+
+func (r *drainResult) add(o drainResult) {
+	r.read += o.read
+	r.forwarded += o.forwarded
+	r.skippedNoTime += o.skippedNoTime
+	r.skippedBadID += o.skippedBadID
+	if o.firstID != 0 && (r.firstID == 0 || o.firstID < r.firstID) {
+		r.firstID = o.firstID
+	}
+	if o.lastID > r.lastID {
+		r.lastID = o.lastID
+	}
+}
+
+// tick executa um ciclo de coleta DRENANDO TODO O BACKLOG. Ver drainOnce.
 //
-// Por que em loop: LoadNewAccessLogs devolve no máximo AccessLogsBatchLimit
-// batidas por chamada. Se o Thera ficou fora por horas, pode haver muito mais
-// que um lote represado no aparelho — e o buffer do iDFace rotaciona (~10.000).
-// Puxar só um lote por tick arriscaria perder batidas antigas antes de drená-las.
-//
-// O loop repete enquanto (a) o último lote veio CHEIO (== limit, sinal de que
-// ainda há mais) E (b) houve PROGRESSO (o cursor avançou nesse lote). Para em:
-//   - erro de forward/persistência -> propaga (Thera fora); reprocessa no
-//     próximo tick, cursor no último confirmado (não-perda);
-//   - lote < limit -> backlog drenado, nada mais a fazer agora;
-//   - sem progresso -> guard anti-loop-infinito (lote cheio só de ids inválidos
-//     ou cursor que não mexeu), evita girar para sempre.
-//
-// O cursor JAMAIS avança sem um 200 do Thera — a garantia de não-perda é a
-// mesma de antes, apenas repetida por lote. O ctx é respeitado entre iterações
-// para parada limpa do serviço.
+// Durante um full-sync on-demand o tick INTEIRO é pulado: o full-sync é o único
+// que fala com o aparelho naquele momento, evitando dois remetentes concorrentes.
 func (c *Collector) tick(ctx context.Context) error {
+	if c.fullSyncRunning.Load() {
+		return nil // full-sync em andamento tem exclusividade
+	}
+	if c.st != nil {
+		c.st.Tick()
+	}
+	cursorInicial := c.cursor.Get()
 	if err := c.device.EnsureSession(ctx); err != nil {
+		c.deviceFail(err)
 		return err
 	}
+	c.deviceOK()
+
 	if c.lastClockSync.IsZero() || time.Since(c.lastClockSync) >= c.clockSyncEvery {
 		now := time.Now().Truncate(time.Second)
 		if err := c.device.SyncClock(ctx, now); err != nil {
@@ -137,35 +258,64 @@ func (c *Collector) tick(ctx context.Context) error {
 	// não pode interromper a importação fiscal das batidas.
 	if c.lastSync.IsZero() || time.Since(c.lastSync) >= c.syncEvery {
 		if err := c.syncUsers(ctx); err != nil {
+			c.theraFail(err)
 			c.log.Errorf("sincronização de usuários/faces falhou (batidas continuam): %v", err)
 		} else {
+			c.theraOK()
 			c.lastSync = time.Now()
 		}
 	}
 
+	var total drainResult
+	var tickErr error
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			tickErr = ctx.Err()
 		default:
+		}
+		if tickErr != nil {
+			break
 		}
 
 		cursorAntes := c.cursor.Get()
-		lote, err := c.drainOnce(ctx)
+		res, lote, err := c.drainOnce(ctx)
+		total.add(res)
 		if err != nil {
-			// Erro de forward/persistência/leitura: propaga. Cursor está no
-			// último confirmado; o próximo tick retenta a partir daí.
-			return err
+			tickErr = err
+			break
 		}
 		cursorDepois := c.cursor.Get()
 		progrediu := cursorDepois > cursorAntes
 
 		// Só continua drenando se o lote veio cheio (há mais represado) E
 		// houve progresso (guard anti-loop-infinito).
-		if lote < idface.AccessLogsBatchLimit || !progrediu {
-			return nil
+		if lote < c.batchSize || !progrediu {
+			break
 		}
 	}
+
+	// Auditoria do tick: só registra quando houve atividade (leu/pulou algo) ou
+	// erro — para não encher o audit.jsonl de ticks vazios.
+	if total.read > 0 || total.skippedBadID > 0 || tickErr != nil {
+		rec := audit.Record{
+			Mode: audit.ModeIncremental, FromID: cursorInicial, ToID: c.cursor.Get(),
+			Read: total.read, Forwarded: total.forwarded,
+			SkippedNoTime: total.skippedNoTime, SkippedBadID: total.skippedBadID,
+		}
+		if tickErr != nil && !errors.Is(tickErr, context.Canceled) {
+			rec.Err = tickErr.Error()
+		}
+		// Só audita se algo relevante aconteceu (evita ruído de erro de sessão sem leitura).
+		if total.read > 0 || total.skippedBadID > 0 {
+			c.writeAudit(rec)
+		}
+	}
+	if c.st != nil {
+		c.st.Forwarded(total.forwarded)
+		c.st.SkippedNoTime(total.skippedNoTime)
+	}
+	return tickErr
 }
 
 func (c *Collector) syncUsers(ctx context.Context) error {
@@ -272,6 +422,9 @@ func (c *Collector) syncUsers(ctx context.Context) error {
 	if err := c.thera.PostSyncResult(ctx, result); err != nil {
 		return err
 	}
+	if c.st != nil {
+		c.st.UserSync(len(result))
+	}
 	c.log.Infof("sincronização concluída: %d usuários observados", len(result))
 	return nil
 }
@@ -284,36 +437,35 @@ func syncObservations(users []idface.UserSnapshot) []thera.SyncObservation {
 	return result
 }
 
-// drainOnce processa UM lote: busca as próximas batidas (id > cursor), traduz
-// user_id -> matrícula e encaminha cada uma ao Thera, avançando o cursor após
-// cada 200. Devolve o tamanho do lote lido (para o tick decidir se drena mais)
-// e o erro que aborta a drenagem.
-//
-// Se PostDao/cursor.Set falharem, o erro é propagado IMEDIATAMENTE (aborta o
-// restante do laço): o cursor não avança nas batidas seguintes, reprocessadas
-// no próximo tick. Este é o coração da não-perda quando o Thera está fora.
-func (c *Collector) drainOnce(ctx context.Context) (int, error) {
-	cursor := c.cursor.Get()
-	logs, err := c.device.LoadNewAccessLogs(ctx, cursor)
-	if err != nil {
-		return 0, err
-	}
-	if len(logs) == 0 {
-		return 0, nil
-	}
-
-	// Ordena ascendente por id numérico (o device já manda order:["id"], mas
-	// reordenamos por garantia, como o Node). Batidas com id inválido vão para
-	// o fim e são puladas no laço.
+// sortLogsByID ordena um lote de access_logs por id ascendente; ids inválidos
+// vão para o fim.
+func sortLogsByID(logs []idface.AccessLog) {
 	sort.SliceStable(logs, func(i, j int) bool {
 		a, ea := logs[i].IdNum()
 		b, eb := logs[j].IdNum()
 		if ea != nil || eb != nil {
-			// inválidos por último
 			return ea == nil && eb != nil
 		}
 		return a < b
 	})
+}
+
+// drainOnce processa UM lote (ver doc da struct). Devolve o drainResult, o
+// tamanho do lote lido e o erro que aborta a drenagem.
+func (c *Collector) drainOnce(ctx context.Context) (drainResult, int, error) {
+	var res drainResult
+	cursor := c.cursor.Get()
+	logs, err := c.device.LoadAccessLogsPage(ctx, cursor, c.batchSize)
+	if err != nil {
+		c.deviceFail(err)
+		return res, 0, err
+	}
+	c.deviceOK()
+	if len(logs) == 0 {
+		return res, 0, nil
+	}
+
+	sortLogsByID(logs)
 
 	// Traduz em lote os user_id -> registration (uma consulta cobre o lote).
 	userIds := make([]string, 0, len(logs))
@@ -325,40 +477,95 @@ func (c *Collector) drainOnce(ctx context.Context) (int, error) {
 	for _, l := range logs {
 		select {
 		case <-ctx.Done():
-			return len(logs), ctx.Err()
+			return res, len(logs), ctx.Err()
 		default:
 		}
 
+		res.read++
 		id, err := l.IdNum()
 		if err != nil {
-			// id inválido: não dá para avançar o cursor com segurança; loga e
-			// pula (o Node corromperia o cursor com NaN).
+			res.skippedBadID++
 			c.log.Errorf("batida com id invalido ignorada: id=%q user=%q time=%q: %v",
 				l.Id, l.UserId, l.Time, err)
 			continue
 		}
+		if res.firstID == 0 {
+			res.firstID = id
+		}
+		if c.st != nil {
+			c.st.SeenDeviceID(id)
+		}
+
+		// TRAVA ANTI-CORRUPÇÃO: sem `time` válido, a batida NÃO é enviada (o
+		// backend carimbaria "agora" e colapsaria horários). Avança o cursor para
+		// não reprocessar para sempre, mas registra a anomalia.
+		if _, ok := validUnixTime(string(l.Time)); !ok {
+			res.skippedNoTime++
+			c.log.Errorf("batida SEM time válido RECUSADA (nunca enviada p/ não corromper horário): id=%s user=%s time=%q",
+				l.Id, l.UserId, l.Time)
+			if err := c.cursor.Set(id); err != nil {
+				return res, len(logs), err
+			}
+			res.lastID = id
+			if c.st != nil {
+				c.st.SetCursor(id)
+			}
+			continue
+		}
 
 		payload := c.buildPayload(l)
-		if err := c.thera.PostDao(ctx, payload); err != nil {
-			// Thera fora / não-2xx: aborta ANTES do setCursor. Cursor fica no
-			// último confirmado; reprocessa no próximo tick.
-			return len(logs), err
+		if err := c.forward(ctx, payload); err != nil {
+			c.theraFail(err)
+			return res, len(logs), err
 		}
+		c.theraOK()
 
 		if err := c.cursor.Set(id); err != nil {
-			// Falha ao persistir cursor: aborta para não avançar em memória sem
-			// persistir. Reprocessa (Thera deduplica) — não perde nada.
-			return len(logs), err
+			return res, len(logs), err
+		}
+		res.forwarded++
+		res.lastID = id
+		if c.st != nil {
+			c.st.SetCursor(id)
 		}
 
-		reg := c.device.Registration(string(l.UserId))
+		reg := c.registrationFor(string(l.UserId))
 		if reg == "" {
 			reg = "-"
 		}
 		c.log.Infof("batida encaminhada: id=%s user=%s matricula=%s time=%s",
 			l.Id, l.UserId, reg, l.Time)
 	}
-	return len(logs), nil
+	return res, len(logs), nil
+}
+
+// forward envia um payload ao Thera com retentativas e backoff exponencial para
+// blips transitórios. Se esgotar as tentativas, devolve o erro (o chamador aborta
+// o lote e reprocessa no próximo tick — o cursor fica no último confirmado).
+func (c *Collector) forward(ctx context.Context, payload thera.DaoPayload) error {
+	var err error
+	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := c.retryBase * time.Duration(int64(1)<<(attempt-1))
+			if backoff > maxRetryBackoff || backoff <= 0 {
+				backoff = maxRetryBackoff
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+			c.log.Infof("reenviando batida ao Thera (tentativa %d/%d) após erro: %v", attempt+1, c.maxRetries+1, err)
+		}
+		err = c.thera.PostDao(ctx, payload)
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+	}
+	return err
 }
 
 // buildPayload monta o DaoPayload de uma batida (regras de fallback do Node).
@@ -385,7 +592,7 @@ func (c *Collector) buildPayload(l idface.AccessLog) thera.DaoPayload {
 		Confidence: string(l.Confidence),
 	}
 	// registration só se houver (nunca string vazia; omitempty cobre).
-	if reg := c.device.Registration(string(l.UserId)); reg != "" {
+	if reg := c.registrationFor(string(l.UserId)); reg != "" {
 		values.Registration = reg
 	}
 
@@ -406,13 +613,184 @@ func (c *Collector) buildPayload(l idface.AccessLog) thera.DaoPayload {
 	}
 }
 
+// FullSyncResult resume o que um full-sync fez (para a UI e o log).
+type FullSyncResult = audit.Record
+
+// FullSync faz a varredura COMPLETA on-demand ("Consultar o Control iD completo").
+// Drena TODO o access_logs concedido do aparelho a partir de startID (use 0 para
+// o histórico inteiro, ou -1 para RETOMAR um full-sync interrompido), carregando
+// SEMPRE o `time` real de cada evento e nunca colapsando horários. É idempotente
+// (o Thera deduplica por device+id+time) e retomável (cursor próprio em
+// fullsync.json). Ao final, VERIFICA a completude (releitura acima do cursor
+// deve vir vazia) e registra um record de auditoria.
+//
+// Só um full-sync roda por vez; enquanto roda, o tick incremental é pulado.
+func (c *Collector) FullSync(ctx context.Context, startID int64, note string) (FullSyncResult, error) {
+	if !c.fullSyncRunning.CompareAndSwap(false, true) {
+		return FullSyncResult{}, errors.New("um full-sync já está em andamento")
+	}
+	defer c.fullSyncRunning.Store(false)
+
+	began := time.Now()
+	if c.st != nil {
+		c.st.FullSyncStart()
+	}
+	c.log.Infof("full-sync iniciado (startID=%d) %s", startID, note)
+
+	rec := audit.Record{Mode: audit.ModeFull, Note: note}
+
+	finish := func(r audit.Record, err error) (audit.Record, error) {
+		r.DurationMs = time.Since(began).Milliseconds()
+		if err != nil && !errors.Is(err, context.Canceled) {
+			r.Err = err.Error()
+		}
+		if errors.Is(err, context.Canceled) {
+			r.Mode = audit.ModeFullPartial
+			r.Err = "interrompido (retomável)"
+		}
+		c.writeAudit(r)
+		if c.st != nil {
+			c.st.Forwarded(r.Forwarded)
+			summary := fmt.Sprintf("ids %d→%d · %d enviadas · %d sem time · verif=%v",
+				r.FromID, r.ToID, r.Forwarded, r.SkippedNoTime, r.Verified)
+			if r.Err != "" {
+				summary = "ERRO: " + r.Err + " · " + summary
+			}
+			c.st.FullSyncDone(summary)
+		}
+		c.log.Infof("full-sync concluído: ids %d→%d, %d enviadas, %d sem time, %d id inválido, verif=%v, dur=%dms",
+			r.FromID, r.ToID, r.Forwarded, r.SkippedNoTime, r.SkippedBadID, r.Verified, r.DurationMs)
+		return r, err
+	}
+
+	if err := c.device.EnsureSession(ctx); err != nil {
+		c.deviceFail(err)
+		return finish(rec, err)
+	}
+	c.deviceOK()
+
+	// Cursor retomável próprio: startID>=0 reinicia a partir dali; <0 retoma.
+	var cursor int64
+	if startID >= 0 {
+		cursor = startID
+		_ = c.fullCursor.Set(cursor)
+	} else {
+		cursor = c.fullCursor.Get()
+	}
+	rec.FromID = cursor
+	startCursor := cursor
+
+	// Menor id ainda no aparelho (detecta rotação do buffer).
+	if min, err := c.device.MinAccessLogID(ctx); err == nil {
+		rec.DeviceMinID = min
+		if startCursor > 0 && min > startCursor+1 {
+			rec.RotatedGap = min - startCursor - 1
+			c.log.Errorf("full-sync: possível rotação do buffer — ids (%d..%d) não estão mais no aparelho (lacuna de até %d)",
+				startCursor+1, min-1, rec.RotatedGap)
+		}
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return finish(rec, ctx.Err())
+		default:
+		}
+
+		page, err := c.device.LoadAccessLogsPage(ctx, cursor, c.batchSize)
+		if err != nil {
+			c.deviceFail(err)
+			return finish(rec, err)
+		}
+		c.deviceOK()
+		if len(page) == 0 {
+			break // drenou tudo
+		}
+		sortLogsByID(page)
+
+		// Traduz user_id -> matrícula em lote (uma consulta cobre a página).
+		pageUserIds := make([]string, 0, len(page))
+		for _, l := range page {
+			pageUserIds = append(pageUserIds, string(l.UserId))
+		}
+		c.device.ResolveRegistrations(ctx, pageUserIds)
+
+		progressed := false
+		for _, l := range page {
+			select {
+			case <-ctx.Done():
+				return finish(rec, ctx.Err())
+			default:
+			}
+
+			rec.Read++
+			id, iderr := l.IdNum()
+			if iderr != nil {
+				rec.SkippedBadID++
+				c.log.Errorf("full-sync: id inválido ignorado: id=%q user=%q", l.Id, l.UserId)
+				continue
+			}
+
+			// TRAVA ANTI-CORRUPÇÃO (igual ao incremental).
+			if _, ok := validUnixTime(string(l.Time)); !ok {
+				rec.SkippedNoTime++
+				c.log.Errorf("full-sync: batida SEM time válido RECUSADA: id=%s user=%s time=%q", l.Id, l.UserId, l.Time)
+				cursor = id
+				_ = c.fullCursor.Set(id)
+				rec.ToID = id
+				progressed = true
+				continue
+			}
+
+			payload := c.buildPayload(l)
+			if err := c.forward(ctx, payload); err != nil {
+				c.theraFail(err)
+				return finish(rec, err)
+			}
+			c.theraOK()
+			cursor = id
+			_ = c.fullCursor.Set(id)
+			rec.ToID = id
+			rec.Forwarded++
+			progressed = true
+			if c.st != nil {
+				c.st.FullSyncProgress(cursor, int64(rec.Forwarded), int64(rec.Read))
+			}
+		}
+		// Guard anti-loop-infinito: página inteira só de ids inválidos.
+		if !progressed {
+			c.log.Errorf("full-sync: página sem progresso (todos ids inválidos) — encerrando para não repetir")
+			break
+		}
+	}
+
+	// Verificação de completude: acima do cursor não pode ter mais nada.
+	if verifyPage, verr := c.device.LoadAccessLogsPage(ctx, cursor, 1); verr == nil {
+		rec.Verified = len(verifyPage) == 0
+	}
+
+	// Avança o cursor da coleta incremental para não reprocessar tudo de novo.
+	if cursor > c.cursor.Get() {
+		if err := c.cursor.Set(cursor); err == nil && c.st != nil {
+			c.st.SetCursor(cursor)
+		}
+	}
+	// Full-sync concluído: zera o cursor retomável.
+	_ = c.fullCursor.Clear()
+
+	return finish(rec, nil)
+}
+
+// FullSyncRunning diz se um full-sync está em andamento.
+func (c *Collector) FullSyncRunning() bool { return c.fullSyncRunning.Load() }
+
 // Run roda o loop principal até o contexto ser cancelado (shutdown limpo do
 // serviço). Entre ticks, dorme pollSeconds respeitando ctx.Done(). Se um
 // UpdateHook estiver configurado, checa novas versões nos intervalos
 // definidos, sempre num ponto seguro do ciclo (fora de um forward em voo).
 func (c *Collector) Run(ctx context.Context) {
-	c.log.Infof("Coletor PontoPar iniciado · aparelho=%s · thera=%s · poll=%ds",
-		c.cfg.DeviceBase(), c.cfg.TheraBase, c.cfg.Poll())
+	c.log.Infof("Coletor PontoPar iniciado · aparelho=%s · thera=%s · poll=%ds · lote=%d",
+		c.cfg.DeviceBase(), c.cfg.TheraBase, c.cfg.Poll(), c.batchSize)
 
 	poll := time.Duration(c.cfg.Poll()) * time.Second
 	nextUpdateCheck := time.Time{}
@@ -429,6 +807,9 @@ func (c *Collector) Run(ctx context.Context) {
 				return
 			}
 			c.log.Errorf("erro no ciclo (tenta de novo): %v", err)
+			if c.st != nil {
+				c.st.RecordError(err.Error())
+			}
 			// Força relogin no próximo tick (igual session=null do Node).
 			c.device.ClearSession()
 		}
@@ -445,6 +826,9 @@ func (c *Collector) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			c.log.Infof("coletor finalizando (contexto cancelado)")
+			if c.st != nil {
+				c.st.Flush()
+			}
 			return
 		case <-time.After(poll):
 		}

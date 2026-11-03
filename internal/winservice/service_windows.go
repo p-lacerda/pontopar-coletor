@@ -272,6 +272,57 @@ func updateInstalledPath(exePath string) error {
 	return nil
 }
 
+// SetAutoStart liga/desliga o "Iniciar com o Windows" do serviço, alternando o
+// StartType entre Automatic (sobe no boot) e DemandStart (manual). NÃO para nem
+// remove o serviço — só muda quando ele arranca. Rodando como LocalSystem (o
+// próprio serviço, via painel web) a mudança não pede UAC; rodando como usuário
+// comum (janela), exige elevação (SERVICE_CHANGE_CONFIG).
+func SetAutoStart(enable bool) error {
+	m, err := mgr.Connect()
+	if err != nil {
+		return fmt.Errorf("conectar ao SCM: %w", err)
+	}
+	defer m.Disconnect()
+	s, err := m.OpenService(ServiceName)
+	if err != nil {
+		return fmt.Errorf("servico %s nao esta instalado", ServiceName)
+	}
+	defer s.Close()
+	cfg, err := s.Config()
+	if err != nil {
+		return fmt.Errorf("ler configuracao do servico: %w", err)
+	}
+	if enable {
+		cfg.StartType = mgr.StartAutomatic
+	} else {
+		cfg.StartType = mgr.StartManual
+	}
+	if err := s.UpdateConfig(cfg); err != nil {
+		return fmt.Errorf("atualizar inicio automatico: %w", err)
+	}
+	return nil
+}
+
+// IsAutoStart diz se o serviço está configurado para iniciar com o Windows.
+// Erro se o serviço não estiver instalado.
+func IsAutoStart() (bool, error) {
+	m, err := mgr.Connect()
+	if err != nil {
+		return false, fmt.Errorf("conectar ao SCM: %w", err)
+	}
+	defer m.Disconnect()
+	s, err := m.OpenService(ServiceName)
+	if err != nil {
+		return false, fmt.Errorf("servico %s nao esta instalado", ServiceName)
+	}
+	defer s.Close()
+	cfg, err := s.Config()
+	if err != nil {
+		return false, fmt.Errorf("ler configuracao do servico: %w", err)
+	}
+	return cfg.StartType == mgr.StartAutomatic, nil
+}
+
 // Stop para o serviço e aguarda a transição para Stopped (com timeout).
 func Stop() error {
 	return controlService(svc.Stop, svc.Stopped)

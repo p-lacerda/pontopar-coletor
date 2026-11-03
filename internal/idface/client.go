@@ -602,19 +602,38 @@ func findNamedID(rows []map[string]json.RawMessage, prefix string) int64 {
 // ATENÇÃO: no request ao device, os valores de id e event são NÚMEROS (não
 // string). Só no /dao do Thera é que viram string.
 func (c *Client) LoadNewAccessLogs(ctx context.Context, cursor int64) ([]AccessLog, error) {
+	return c.LoadAccessLogsPage(ctx, cursor, AccessLogsBatchLimit)
+}
+
+// LoadAccessLogsPage é a paginação por CHAVE (keyset) dos access_logs concedidos:
+// devolve até `limit` batidas com event=7 e id > afterId, ordenadas por id
+// ascendente. É a primitiva usada tanto pelo polling incremental quanto pela
+// varredura completa (full-sync): paginar por "id > último visto" é robusto a
+// inserções concorrentes (o aparelho continua recebendo batidas durante a
+// varredura) e não depende de offset.
+//
+// O chamador repete a chamada com afterId = maior id da página anterior até a
+// página vir com menos que `limit` itens (fim do backlog).
+func (c *Client) LoadAccessLogsPage(ctx context.Context, afterId int64, limit int) ([]AccessLog, error) {
+	if limit <= 0 {
+		limit = AccessLogsBatchLimit
+	}
 	body := map[string]any{
 		"object": "access_logs",
 		"where": []map[string]any{
-			{"object": "access_logs", "field": "id", "operator": ">", "value": cursor, "connector": ") AND ("},
+			{"object": "access_logs", "field": "id", "operator": ">", "value": afterId, "connector": ") AND ("},
 			{"object": "access_logs", "field": "event", "operator": "=", "value": 7},
 		},
 		"order": []string{"id"},
-		"limit": AccessLogsBatchLimit,
+		"limit": limit,
 	}
 	endpoint := c.base + "/load_objects.fcgi?session=" + url.QueryEscape(c.Session())
 	data, status, err := c.postJSON(ctx, endpoint, body)
 	if err != nil {
 		return nil, err
+	}
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		c.ClearSession()
 	}
 	if status < 200 || status >= 300 {
 		return nil, fmt.Errorf("load_objects access_logs respondeu %d: %s", status, strings.TrimSpace(string(data)))
@@ -626,6 +645,40 @@ func (c *Client) LoadNewAccessLogs(ctx context.Context, cursor int64) ([]AccessL
 		return nil, fmt.Errorf("resposta invalida de access_logs: %w", err)
 	}
 	return out.AccessLogs, nil
+}
+
+// MinAccessLogID devolve o MENOR access_logs.id ainda presente no aparelho
+// (qualquer event). Serve para detectar ROTAÇÃO do buffer (~10.000 registros):
+// se o cursor da coleta ficou abaixo deste mínimo, os ids entre eles saíram do
+// aparelho e não são mais recuperáveis dele. Devolve 0 quando não há logs.
+func (c *Client) MinAccessLogID(ctx context.Context) (int64, error) {
+	body := map[string]any{
+		"object": "access_logs",
+		"fields": []string{"id"},
+		"order":  []string{"id"},
+		"limit":  1,
+	}
+	endpoint := c.base + "/load_objects.fcgi?session=" + url.QueryEscape(c.Session())
+	data, status, err := c.postJSON(ctx, endpoint, body)
+	if err != nil {
+		return 0, err
+	}
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		c.ClearSession()
+	}
+	if status < 200 || status >= 300 {
+		return 0, fmt.Errorf("min access_logs respondeu %d: %s", status, strings.TrimSpace(string(data)))
+	}
+	var out struct {
+		AccessLogs []AccessLog `json:"access_logs"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return 0, fmt.Errorf("resposta invalida de min access_logs: %w", err)
+	}
+	if len(out.AccessLogs) == 0 {
+		return 0, nil
+	}
+	return out.AccessLogs[0].IdNum()
 }
 
 // Registration devolve a matrícula em cache para um user_id (miss -> "").

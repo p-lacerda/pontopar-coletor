@@ -13,6 +13,17 @@ offline) e **auto-update** via GitHub Releases.
 - **Idempotente:** o Thera deduplica por `(aparelho, id da batida, hora)`; o
   cursor só avança depois que o Thera confirma (200). Se o Thera cair, o cursor
   não avança e reprocessa depois — nada se perde.
+- **Painel web local** em `http://127.0.0.1:47114` (só loopback): status ao vivo,
+  log, auditoria, **full-sync** ("Consultar o Control iD completo") e todas as
+  configurações. Abra pela bandeja → **Abrir painel completo**.
+- **Trava anti-colapso de horário:** o coletor **NUNCA** envia uma batida sem o
+  `time` real do aparelho. O `punchedAt` e a chave de dedupe do Thera derivam do
+  `time`; uma batida sem `time` viraria um carimbo "agora" e colapsaria vários
+  eventos num segundo só (o bug histórico). Batidas sem `time` são **recusadas** e
+  **auditadas**, nunca carimbadas.
+- **Auditoria** persistente (`audit.jsonl`, exportável em CSV): cada
+  sincronização registra a faixa de ids, quantas batidas foram lidas/enviadas/
+  recusadas e se a drenagem foi **verificada** como completa — a prova de completude.
 
 ---
 
@@ -49,6 +60,32 @@ A cada `pollSeconds`:
 > A tradução da matrícula, o NSR, a assinatura e o AFD continuam sendo do Thera
 > — o iDFace é só o leitor.
 
+### Painel web local, full-sync e auditoria
+
+- **Painel** (`http://127.0.0.1:47114`, só loopback — ligado por default): roda
+  **dentro do serviço**, então mostra o estado real do coletor. Tem cartões de
+  status (conexão com o aparelho e com o Thera, cursor, batidas enviadas, batidas
+  recusadas por falta de horário, erros), **log ao vivo**, **tabela de auditoria**
+  (com exportação CSV), o formulário com **todas** as configurações e os botões de
+  ação. Mutações exigem um token injetado na página (um site no navegador não
+  consegue lê-lo). Abra pela bandeja do coletor → **Abrir painel completo**.
+- **Full-sync ("Consultar o Control iD completo"):** um botão que varre **TODO**
+  o `access_logs` concedido do aparelho (paginado por `id`, do mais antigo ao mais
+  novo), **sempre carregando o `time` real** de cada evento, e reenvia tudo ao
+  Thera. É **idempotente** (o Thera deduplica por device+id+hora), **retomável**
+  (cursor próprio em `fullsync.json`) e **verificado** ao final (uma releitura
+  acima do cursor tem que vir vazia). Use quando precisar recuperar o histórico de
+  forma confiável, sem receber "por partes". Enquanto roda, o polling incremental
+  é pausado (um único remetente por vez). Detecta **rotação do buffer** (lacuna) e
+  a registra na auditoria.
+- **Auditoria (`audit.jsonl`):** cada run (incremental ou full) vira uma linha com
+  `fromId → toId`, `read/forwarded/skippedNoTime/skippedBadId`, `rotatedGap`,
+  `verified` e duração. Exporte em CSV pelo painel (`/api/audit.csv`) para anexar a
+  uma prova de completude.
+- **Iniciar com o Windows:** um checkbox (na janela e no painel) alterna o
+  *StartType* do serviço entre **Automático** (sobe no boot) e **Manual**. Pelo
+  painel (que roda como o serviço) a mudança não pede UAC.
+
 ---
 
 ## 2. Configuração (`config.json`)
@@ -67,9 +104,19 @@ fica ao lado do executável).
 | `theraBase` | URL base da API do Thera. |
 | `deviceSecret` | Segredo que o Thera gera ao cadastrar o aparelho (vai na URL do `/dao`). Obrigatório. |
 | `pollSeconds` | Intervalo de verificação. Default `15`. |
+| `batchSize` | Tamanho da página lida do aparelho por vez. Default `500` (1–1000). |
+| `maxRetries` | Retentativas por batida no envio ao Thera antes de desistir no ciclo. Default `4`. |
+| `retryBackoffSeconds` | Base do backoff exponencial entre retentativas (2s, 4s, 8s… até 30s). Default `2`. |
+| `registrationOverrides` | Mapa `{"user_id":"matrícula"}` com **prioridade** sobre o cadastro do aparelho (conserta usuário sem `registration`). Opcional. |
+| `ui.enabled` | Liga/desliga o painel web local. Default `true`. |
+| `ui.port` | Porta do painel em `127.0.0.1`. Default `47114`. |
+| `ui.bind` | Endereço de escuta — **sempre loopback** por segurança. Default `127.0.0.1`. |
 | `update.repo` | `owner/name` do repositório das releases. **Vazio desliga o auto-update.** |
 | `update.checkHours` | Intervalo entre checagens de update. Default `6`. |
 | `update.token` | Token do GitHub (só para repositório **privado** — ver nota abaixo). |
+
+> Todos os campos novos (`batchSize`, `maxRetries`, `ui`, …) têm defaults seguros:
+> um `config.json` antigo continua funcionando sem alteração.
 
 > **IMPORTANTE:** cadastre a **matrícula** de cada colaborador no campo
 > `registration` do usuário no aparelho, **igual** à matrícula dele no Thera
@@ -239,15 +286,19 @@ cmd/pontopar-coletor/main.go   interface gráfica e CLI de serviço
 cmd/pontopar-coletor/app.manifest + rsrc_windows_amd64.syso
                                 manifesto embutido dos controles visuais Windows
 cmd/pontopar-installer          PontoPar-Setup: instalador/desinstalador Windows
-internal/gui                   janela de configuração + ícone na bandeja
+internal/app                   supervisor: carrega config, sobe o painel, roda o coletor, recarga a quente
+internal/gui                   janela walk + bandeja + botão "Abrir painel" + checkbox "Iniciar com o Windows"
+internal/webui                 painel web local (localhost): status, log, auditoria, full-sync, config
 internal/setup                 assistente de instalação/desinstalação (UAC)
-internal/config                carrega/valida config.json (ao lado do exe)
-internal/idface                cliente do iDFace (login, sessão, access_logs, de-para user→matrícula)
+internal/config                carrega/valida config.json (ao lado do exe); batch/retry/overrides/ui
+internal/idface                cliente do iDFace (login, sessão, access_logs paginado, de-para, min id)
 internal/thera                 cliente do webhook /dao do Thera
-internal/collector             loop de coleta, cursor pós-200, integração do auto-update
-internal/store                 cursor.json com escrita atômica (temp+fsync+rename)
+internal/collector             loop de coleta, trava anti-colapso de horário, full-sync, cursor pós-200
+internal/state                 estado vivo (status/contadores) + state.json
+internal/audit                 auditoria persistente (audit.jsonl) + export CSV — prova de completude
+internal/store                 cursor.json / fullsync.json com escrita atômica (temp+fsync+rename)
 internal/updater               auto-update via GitHub Releases (checksums.txt, self-replace, restart)
-internal/winservice            serviço do Windows (SCM): Execute + install/uninstall/start/stop/status
+internal/winservice            serviço do Windows (SCM): install/start/stop/status + auto-start toggle
 internal/applog                log em arquivo (rotativo) + console no modo run
 .github/workflows/release.yml  build windows/amd64 + checksums + GitHub Release em tag v*
 ```

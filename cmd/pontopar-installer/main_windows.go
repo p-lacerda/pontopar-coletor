@@ -48,16 +48,24 @@ type updateConfig struct {
 
 // installerConfig não importa o tipo interno do coletor para permitir que o
 // instalador leia também o config de exemplo, onde deviceId pode ser string.
+// Os campos novos (batch/retry/ui/overrides/facial) são preservados como RawMessage
+// para não serem descartados no re-serialize ao instalar.
 type installerConfig struct {
-	DeviceIP     string       `json:"deviceIp"`
-	DevicePort   int          `json:"devicePort"`
-	Login        string       `json:"login"`
-	Password     string       `json:"password"`
-	DeviceID     string       `json:"deviceId"`
-	TheraBase    string       `json:"theraBase"`
-	DeviceSecret string       `json:"deviceSecret"`
-	PollSeconds  int          `json:"pollSeconds"`
-	Update       updateConfig `json:"update"`
+	DeviceIP              string          `json:"deviceIp"`
+	DevicePort            int             `json:"devicePort"`
+	Login                 string          `json:"login"`
+	Password              string          `json:"password"`
+	DeviceID              string          `json:"deviceId"`
+	TheraBase             string          `json:"theraBase"`
+	DeviceSecret          string          `json:"deviceSecret"`
+	PollSeconds           int             `json:"pollSeconds"`
+	BatchSize             int             `json:"batchSize,omitempty"`
+	MaxRetries            int             `json:"maxRetries,omitempty"`
+	RetryBackoffSeconds   int             `json:"retryBackoffSeconds,omitempty"`
+	RegistrationOverrides json.RawMessage `json:"registrationOverrides,omitempty"`
+	UI                    json.RawMessage `json:"ui,omitempty"`
+	Facial                json.RawMessage `json:"facial,omitempty"`
+	Update                updateConfig    `json:"update"`
 }
 
 func main() {
@@ -471,6 +479,21 @@ func normalizeConfig(cfg *installerConfig) {
 	}
 	if cfg.Update.Repo == "" {
 		cfg.Update.Repo = "p-lacerda/pontopar-coletor"
+	}
+	if cfg.BatchSize == 0 {
+		cfg.BatchSize = 500
+	}
+	if cfg.MaxRetries == 0 {
+		cfg.MaxRetries = 4
+	}
+	if cfg.RetryBackoffSeconds == 0 {
+		cfg.RetryBackoffSeconds = 2
+	}
+	if len(cfg.UI) == 0 {
+		cfg.UI = json.RawMessage(`{"enabled":true,"port":47114,"bind":"127.0.0.1"}`)
+	}
+	if len(cfg.RegistrationOverrides) == 0 {
+		cfg.RegistrationOverrides = json.RawMessage(`{}`)
 	}
 }
 

@@ -32,7 +32,25 @@ type Cursor struct {
 
 // NewCursor cria um cursor persistido em <dir>/cursor.json.
 func NewCursor(dir string) *Cursor {
-	return &Cursor{dir: dir, path: filepath.Join(dir, cursorFile)}
+	return NewNamedCursor(dir, cursorFile)
+}
+
+// NewNamedCursor cria um cursor persistido em <dir>/<name>. Usado para manter um
+// cursor SEPARADO do incremental (ex.: o progresso retomável do full-sync em
+// fullsync.json), sem interferir no cursor.json da coleta normal.
+func NewNamedCursor(dir, name string) *Cursor {
+	return &Cursor{dir: dir, path: filepath.Join(dir, name)}
+}
+
+// Clear remove o arquivo do cursor (usado para zerar o progresso de um full-sync
+// concluído). Ausência do arquivo é tratada como cursor 0 por Get.
+func (c *Cursor) Clear() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := os.Remove(c.path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 // Get lê o cursor do disco. Se o arquivo não existir ou estiver corrompido,

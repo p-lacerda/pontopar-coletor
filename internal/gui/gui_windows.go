@@ -138,6 +138,36 @@ func Run(version string) error {
 	}
 	status.SetText("Serviço: verificando…")
 
+	// "Iniciar com o Windows": alterna o StartType do serviço (Automatic/Manual).
+	autoStart, err := walk.NewCheckBox(mw)
+	if err != nil {
+		return err
+	}
+	autoStart.SetText("Iniciar com o Windows (início automático do serviço)")
+	syncingAuto := true
+	if enabled, aerr := winservice.IsAutoStart(); aerr == nil {
+		autoStart.SetChecked(enabled)
+		autoStart.SetEnabled(true)
+	} else {
+		// Serviço ainda não instalado: o início automático se liga ao instalar.
+		autoStart.SetEnabled(false)
+	}
+	syncingAuto = false
+	autoStart.CheckedChanged().Attach(func() {
+		if syncingAuto {
+			return
+		}
+		want := autoStart.Checked()
+		if err := winservice.SetAutoStart(want); err != nil {
+			walk.MsgBox(mw, title, "Não foi possível alterar o início automático:\n"+err.Error()+
+				"\n\nUse o painel completo (ele roda como serviço e não precisa de administrador) ou abra este programa como administrador.", walk.MsgBoxIconError)
+			syncingAuto = true
+			autoStart.SetChecked(!want)
+			syncingAuto = false
+			return
+		}
+	})
+
 	buttons, err := walk.NewComposite(mw)
 	if err != nil {
 		return err
@@ -165,6 +195,19 @@ func Run(version string) error {
 		return err
 	}
 	stopButton.SetText("Parar serviço")
+
+	panelButton, err := walk.NewPushButton(mw)
+	if err != nil {
+		return err
+	}
+	panelButton.SetText("Abrir painel completo (status, auditoria, full-sync)")
+	panelButton.Clicked().Attach(func() {
+		panelURL := fmt.Sprintf("http://127.0.0.1:%d", cfg.UIPort())
+		if !win.ShellExecute(mw.Handle(), nil, syscall.StringToUTF16Ptr(panelURL), nil, nil, win.SW_SHOWNORMAL) {
+			walk.MsgBox(mw, title, "Não consegui abrir o navegador. Acesse manualmente:\n"+panelURL+
+				"\n\nO painel responde enquanto o serviço estiver rodando.", walk.MsgBoxIconInformation)
+		}
+	})
 
 	autoButton, err := walk.NewPushButton(mw)
 	if err != nil {
@@ -224,6 +267,14 @@ func Run(version string) error {
 	}
 
 	refreshStatus := func() {
+		if enabled, aerr := winservice.IsAutoStart(); aerr == nil {
+			syncingAuto = true
+			autoStart.SetChecked(enabled)
+			autoStart.SetEnabled(true)
+			syncingAuto = false
+		} else {
+			autoStart.SetEnabled(false)
+		}
 		serviceStatus, err := winservice.Status()
 		if err != nil {
 			status.SetText("Serviço: não foi possível consultar — " + err.Error())
