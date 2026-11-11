@@ -53,3 +53,9 @@ func IsAutoStart() (bool, error) { return false, errNotWindows }
 
 // Status não é suportado fora do Windows.
 func Status() (string, error) { return "", errNotWindows }
+
+// EnsureHealthy não faz nada fora do Windows.
+func EnsureHealthy(exePath string) ([]string, error) { return nil, errNotWindows }
+
+// ErrAlreadyRunning espelha o do Windows.
+var ErrAlreadyRunning = errors.New("o servico ja esta rodando")

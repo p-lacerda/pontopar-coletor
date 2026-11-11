@@ -3,8 +3,9 @@
 Programa Windows (em Go) que roda numa PC leve **na mesma rede (LAN/WiFi)** do
 aparelho **Control iD iDFace** (linha de Acesso, HTTP porta 80). Faz *polling*
 das batidas faciais do aparelho e encaminha cada batida NOVA para o **Thera** na
-nuvem. Instala-se por um **assistente do Windows** (auto-start no boot), traz uma
-**interface gráfica com ícone na bandeja** e tem **reprocessamento offline**
+nuvem. Instala-se por um **assistente do Windows** (serviço com auto-start no
+boot + app na bandeja que abre no logon), traz um **painel estilizado** (Edge/Chrome
+em modo app) e tem **reprocessamento offline**
 (não perde batida se a PC ou o Thera ficarem
 offline) e **auto-update** via GitHub Releases.
 
@@ -13,9 +14,15 @@ offline) e **auto-update** via GitHub Releases.
 - **Idempotente:** o Thera deduplica por `(aparelho, id da batida, hora)`; o
   cursor só avança depois que o Thera confirma (200). Se o Thera cair, o cursor
   não avança e reprocessa depois — nada se perde.
-- **Painel web local** em `http://127.0.0.1:47114` (só loopback): status ao vivo,
-  log, auditoria, **full-sync** ("Consultar o Control iD completo") e todas as
-  configurações. Abra pela bandeja → **Abrir painel completo**.
+- **App PontoPar Coletor** (ícone na bandeja, com selo de status 🟢🟡🔴🔵): abre
+  sozinho no logon, avisa quando o relógio cai/volta e quando um refill termina,
+  e **religa o serviço** se ele estiver parado com o início automático ligado.
+  Menu: Abrir painel · Coletar agora · **Refill** (tudo / hoje / 7 / 30 dias /
+  período) · Iniciar com o Windows.
+- **Painel** em `http://127.0.0.1:47114` (só loopback), aberto pelo app numa
+  janela própria: status ao vivo, batidas de hoje, últimas batidas, **Refill** com
+  progresso e diagnóstico (lacuna por rotação, sem matrícula), configurações em
+  seções, log e auditoria. Tema claro/escuro.
 - **Trava anti-colapso de horário:** o coletor **NUNCA** envia uma batida sem o
   `time` real do aparelho. O `punchedAt` e a chave de dedupe do Thera derivam do
   `time`; uma batida sem `time` viraria um carimbo "agora" e colapsaria vários
@@ -149,32 +156,51 @@ cursor e logs para não apagar registros de ponto sem querer.
 > A release pública não carrega senha ou `deviceSecret` de cliente. Para uma
 > instalação já preenchida, gere e entregue um Setup privado do cliente.
 
-## 4. Tela do coletor e início automático
+## 4. O app, o painel e o início automático
 
-Dê dois cliques em `pontopar-coletor.exe`. A tela permite conferir ou alterar
-IP, porta e credenciais do Control iD, salvar a configuração e testar se a PC
-consegue alcançar o aparelho. O endereço do Thera, o segredo e o repositório
-de atualizações já vêm no `config.json` e não são expostos na tela.
+**Duas peças, de propósito:**
 
-- Ao fechar a janela, ele **não para a coleta**: apenas fica minimizado no
-  ícone do PontoPar perto do relógio do Windows.
-- Clique no ícone da bandeja para abrir a tela novamente. O menu também tem
-  `Fechar janela`, que fecha só a tela; o serviço instalado continua rodando.
-- Clique em **Assistente: instalar / desinstalar** e depois em **Instalar e
-  iniciar**. O Windows mostrará a confirmação de administrador (UAC); depois
-  de aceitar, o programa é copiado para
-  `C:\ProgramData\PontoParColetor\`, iniciado e configurado para iniciar a
-  cada boot.
-- O instalador não depende da pasta Downloads: ela pode ser movida ou limpa
-  depois da instalação sem parar a coleta.
-- No mesmo assistente, **Desinstalar serviço** para a coleta e remove o início
-  automático. Configuração, cursor e logs são preservados para não apagar
-  registros de ponto acidentalmente.
+| Peça | Roda como | Quando sobe | Função |
+|---|---|---|---|
+| Serviço `PontoParColetor` | LocalSystem (sessão 0) | **no boot**, sem ninguém logado | coleta e envia as batidas; hospeda o painel |
+| App da bandeja (`pontopar-coletor.exe tray`) | o usuário logado | **no logon** (HKLM `…\Run`) | ícone de status, avisos, atalhos, religa o serviço |
 
-O coletor precisa ser instalado como serviço apenas para operar sozinho 24h:
-continuar após reiniciar a PC, mesmo sem usuário logado, e receber reinício
-automático do Windows em caso de falha ou atualização. Para só testar a tela,
-não é necessário instalar.
+O que garante que **sobe com o Windows** (e continua de pé):
+
+- Serviço com `StartType=Automatic` e **recovery** que reinicia em 5s / 15s / 60s
+  (a 3ª ação vale para todas as falhas seguintes) — **inclusive** quando o
+  processo sai com erro sem "crashar" (`FailureActionsOnNonCrashFailures`), e
+  quando o coletor para sozinho (o serviço sai com erro para o Windows religar).
+- O `install-start` é **idempotente e repara** uma instalação existente: caminho
+  do exe (com aspas), auto-start, recovery, permissão para usuários interativos
+  **iniciarem** o serviço sem UAC, e o app no logon. Se falhar, **mostra o erro**
+  (antes falhava calado no instalador). Uma fonte de eventos que sobrou de uma
+  instalação antiga não apaga mais o serviço recém-criado.
+- O app da bandeja é um **watchdog**: com "Iniciar com o Windows" ligado, se o
+  serviço estiver parado ele religa (de minuto em minuto) e avisa. Sem permissão
+  (instalação antiga), o menu **Iniciar coletor** repara com UAC.
+- No logon o app avisa "PontoPar Coletor iniciado com o Windows" com o status, e
+  no Windows 11 o ícone fica visível na barra (não escondido no "^") — uma vez;
+  se o usuário esconder, vale a escolha dele.
+
+**Desligar** o "Iniciar com o Windows" (no painel ou na bandeja) muda o serviço
+para Manual **e** tira o app do logon. Para uma parada de manutenção, desligue-o
+antes de parar o coletor — senão a bandeja religa em até 1 minuto.
+
+**Refill** (painel → Refill, ou bandeja → Refill): relê a memória do relógio e
+reenvia ao Thera; o Thera deduplica (nada duplica, o que faltava entra). Modos:
+tudo desde o início, desde uma data, período, retomar interrompido. O resultado
+mostra lidas/enviadas e os dois motivos clássicos de "não apareceu no cartão":
+**lacuna por rotação** (o relógio já apagou registros antigos) e **sem
+matrícula** (o Thera descarta sem vínculo user_id→colaborador). O Thera também
+pode pedir um refill remoto (`GET …/commands`); o coletor confirma recebimento,
+execução e resultado em `POST …/commands/ack`.
+
+**Sem o serviço instalado** (ex.: rodou o .exe do Downloads), o app serve o
+painel em **modo setup**: preencher/testar/salvar a configuração e **Instalar e
+iniciar** (UAC). Depois disso o painel passa a ser o do serviço sozinho.
+
+**Ver o painel sem Windows** (para mexer no visual): `go run ./cmd/pontopar-preview -scenario ok|refill|offline|setup` e abra `http://127.0.0.1:47199`.
 
 ## 5. Instalar como serviço do Windows (alternativa por linha de comando)
 
@@ -282,13 +308,19 @@ git push origin v1.2.3    # dispara .github/workflows/release.yml
 ## 8. Estrutura do projeto
 
 ```
-cmd/pontopar-coletor/main.go   interface gráfica e CLI de serviço
+cmd/pontopar-coletor/main.go   app (bandeja + painel) e CLI de serviço
 cmd/pontopar-coletor/app.manifest + rsrc_windows_amd64.syso
-                                manifesto embutido dos controles visuais Windows
+                                manifesto + ícone PontoPar (recurso 7) + VERSIONINFO embutidos no .exe
+                                (regerar: cd cmd/pontopar-coletor && go run github.com/tc-hib/go-winres@v0.3.3 make --in winres/winres.json --arch amd64 --out rsrc;
+                                 o release regera com a versão da tag)
+cmd/pontopar-preview           painel com dados de exemplo, em qualquer SO (design)
+installer/pontopar.iss + pontopar.ico  instalador Inno Setup (o usado no release)
 cmd/pontopar-installer          PontoPar-Setup: instalador/desinstalador Windows
 internal/app                   supervisor: carrega config, sobe o painel, roda o coletor, recarga a quente
-internal/gui                   janela walk + bandeja + botão "Abrir painel" + checkbox "Iniciar com o Windows"
-internal/webui                 painel web local (localhost): status, log, auditoria, full-sync, config
+internal/desktop               app da bandeja: ícone de status, menu, avisos, watchdog do serviço, modo setup
+internal/autorun               app da bandeja no logon (HKLM\...\Run)
+internal/assets                marca PontoPar (glifo) para bandeja/painel
+internal/webui                 painel (localhost): status, refill, config, log, auditoria
 internal/setup                 assistente de instalação/desinstalação (UAC)
 internal/config                carrega/valida config.json (ao lado do exe); batch/retry/overrides/ui
 internal/idface                cliente do iDFace (login, sessão, access_logs paginado, de-para, min id)
@@ -306,6 +338,18 @@ internal/applog                log em arquivo (rotativo) + console no modo run
 ---
 
 ## 9. Troubleshooting
+
+- **"Não iniciou com o Windows":** veja o ícone do PontoPar na bandeja (no
+  Windows 11 pode estar no "^"). 🔴 *Coletor parado* → botão direito → **Iniciar
+  coletor** (repara o serviço com UAC). Confirme no painel → Configurações →
+  Windows que **Iniciar com o Windows** está ligado. Em `services.msc`, o serviço
+  *Coletor PontoPar* deve estar **Automático**. Se a instalação falhou, agora
+  aparece uma mensagem com o motivo; o log fica em
+  `C:\ProgramData\PontoParColetor\pontopar-coletor.log`.
+- **Refill "não trouxe nada":** abra Refill → *Resultado do último refill*. Lacuna
+  por rotação = o relógio já não tem aqueles registros. Sem matrícula = cadastre a
+  matrícula no Control iD (ou use a matrícula manual). Lidas 0 = não havia
+  batidas no período.
 
 - **`install` diz "conectar ao SCM (rode como Administrador)":** abra o Prompt
   **como Administrador**. `install`/`uninstall`/`start`/`stop` exigem elevação.

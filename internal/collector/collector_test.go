@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -102,12 +103,30 @@ type fakeThera struct {
 	calls    int                 // nº de REQUISIÇÕES /dao (p/ provar o batelamento)
 	pending  string              // JSON do pendingFullSync servido em /commands (read-once)
 	cmdReads int                 // nº de leituras de /commands
+	acks     []map[string]any    // corpos recebidos em /commands/ack
+	daoDelay time.Duration       // atraso artificial no /dao (simula Thera lento)
+}
+
+func (ft *fakeThera) ackList() []map[string]any {
+	ft.mu.Lock()
+	defer ft.mu.Unlock()
+	return append([]map[string]any(nil), ft.acks...)
 }
 
 func newFakeThera() *fakeThera {
 	ft := &fakeThera{}
 	ft.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/dao") {
+			ft.mu.Lock()
+			delay := ft.daoDelay
+			ft.mu.Unlock()
+			if delay > 0 {
+				select {
+				case <-time.After(delay):
+				case <-r.Context().Done():
+					return
+				}
+			}
 			body, _ := io.ReadAll(r.Body)
 			var p struct {
 				ObjectChanges []struct {
@@ -120,6 +139,15 @@ func newFakeThera() *fakeThera {
 			for _, oc := range p.ObjectChanges {
 				ft.dao = append(ft.dao, oc.Values)
 			}
+			ft.mu.Unlock()
+			_, _ = w.Write([]byte(`{"ok":true}`))
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/commands/ack") {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			ft.mu.Lock()
+			ft.acks = append(ft.acks, body)
 			ft.mu.Unlock()
 			_, _ = w.Write([]byte(`{"ok":true}`))
 			return
@@ -385,5 +413,213 @@ func TestIncrementalTickRefusesMissingTime(t *testing.T) {
 	}
 	if st.Get().SkippedNoTime != 1 {
 		t.Errorf("skippedNoTime no estado: quero 1, veio %d", st.Get().SkippedNoTime)
+	}
+}
+
+// Um refill pedido pelo Thera com commandId é confirmado: "running" no início e
+// "done" com o resultado (lidas/enviadas/sem matrícula) no fim — é o que deixa o
+// RH ver no Thera que o refill rodou e o que ele encontrou.
+func TestRemoteRefillAcksRunningAndDoneWithResult(t *testing.T) {
+	logs := []fakeLog{
+		{ID: 1, Time: "1700000100", User: "100"},
+		{ID: 2, Time: "1700000200", User: "999"}, // sem matrícula no aparelho
+		{ID: 3, Time: "1700000300", User: "100"},
+	}
+	dev := fakeDevice(t, logs, map[string]string{"100": "0003"})
+	defer dev.Close()
+	ft := newFakeThera()
+	defer ft.srv.Close()
+	c, st, _ := newTestCollector(t, dev.URL, ft.srv.URL)
+
+	ft.setPending(`{"startId":0,"fromUnix":0,"toUnix":0,"commandId":"cmd-42"}`)
+	c.maybeRunQueuedFullSync(context.Background())
+
+	deadline := time.Now().Add(3 * time.Second)
+	for len(ft.ackList()) < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("esperava 2 acks (running, done), veio %+v", ft.ackList())
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	acks := ft.ackList()
+	if acks[0]["commandId"] != "cmd-42" || acks[0]["status"] != "running" {
+		t.Errorf("primeiro ack deveria ser running do cmd-42: %+v", acks[0])
+	}
+	if acks[1]["status"] != "done" {
+		t.Fatalf("segundo ack deveria ser done: %+v", acks[1])
+	}
+	res, _ := acks[1]["result"].(map[string]any)
+	if res["read"] != float64(3) || res["forwarded"] != float64(3) || res["noRegistration"] != float64(1) {
+		t.Errorf("resultado no ack inesperado: %+v", res)
+	}
+	snap := st.Get()
+	if snap.FullSyncLast == nil || snap.FullSyncLast.NoRegistration != 1 || snap.FullSyncSource != SourceThera {
+		t.Errorf("estado do último refill inesperado: %+v (origem %q)", snap.FullSyncLast, snap.FullSyncSource)
+	}
+}
+
+// Sem commandId (servidor antigo, fila em memória), nada de ack.
+func TestRemoteRefillWithoutCommandIDDoesNotAck(t *testing.T) {
+	dev := fakeDevice(t, []fakeLog{{ID: 1, Time: "1700000100", User: "100"}}, map[string]string{"100": "1"})
+	defer dev.Close()
+	ft := newFakeThera()
+	defer ft.srv.Close()
+	c, _, _ := newTestCollector(t, dev.URL, ft.srv.URL)
+	ft.setPending(`{"startId":0,"fromUnix":0,"toUnix":0}`)
+	c.maybeRunQueuedFullSync(context.Background())
+	deadline := time.Now().Add(3 * time.Second)
+	for c.FullSyncRunning() || len(ft.sent()) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("refill não concluiu")
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	time.Sleep(30 * time.Millisecond)
+	if n := len(ft.ackList()); n != 0 {
+		t.Fatalf("não deveria confirmar sem commandId; acks=%d", n)
+	}
+}
+
+// "Coletar agora" acorda o loop sem esperar o pollSeconds, e a batida entra no
+// feed do painel com a matrícula e na contagem do dia.
+func TestCollectNowWakesLoopAndFeedsRecentPunches(t *testing.T) {
+	now := time.Now().Unix()
+	logs := []fakeLog{{ID: 7, Time: strconv.FormatInt(now, 10), User: "100"}}
+	dev := fakeDevice(t, logs, map[string]string{"100": "0003"})
+	defer dev.Close()
+	ft := newFakeThera()
+	defer ft.srv.Close()
+	c, st, _ := newTestCollector(t, dev.URL, ft.srv.URL)
+	c.cfg.PollSeconds = 3600 // sem o wake, a 2ª volta só viria em 1h
+	c.lastSync = time.Now()
+	c.lastClockSync = time.Now()
+	c.commandEvery = 0
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { c.Run(ctx); close(done) }()
+
+	waitFor := func(cond func() bool, what string) {
+		deadline := time.Now().Add(3 * time.Second)
+		for !cond() {
+			if time.Now().After(deadline) {
+				t.Fatalf("timeout esperando %s", what)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	waitFor(func() bool { return len(ft.sent()) == 1 }, "primeiro tick")
+	ticks := st.Get().LastTickAt
+	c.CollectNow()
+	waitFor(func() bool { return st.Get().LastTickAt.After(ticks) }, "tick acordado por CollectNow")
+
+	snap := st.Get()
+	if len(snap.RecentPunches) != 1 || snap.RecentPunches[0].Registration != "0003" || snap.RecentPunches[0].ID != 7 {
+		t.Errorf("feed de últimas batidas inesperado: %+v", snap.RecentPunches)
+	}
+	if snap.ForwardedToday != 1 {
+		t.Errorf("batidas hoje: quero 1, veio %d", snap.ForwardedToday)
+	}
+	cancel()
+	<-done
+}
+
+// Desligar o serviço no meio de um refill remoto: o coletor espera o refill
+// encerrar e CONFIRMA "failed" ao Thera antes de Run voltar — senão o comando
+// ficava RUNNING por horas e o botão no Thera travado.
+func TestShutdownDuringRemoteRefillAcksFailedBeforeRunReturns(t *testing.T) {
+	var logs []fakeLog
+	for i := 1; i <= 40; i++ {
+		logs = append(logs, fakeLog{ID: int64(i), Time: strconv.Itoa(1700000000 + i), User: "100"})
+	}
+	dev := fakeDevice(t, logs, map[string]string{"100": "1"})
+	defer dev.Close()
+	ft := newFakeThera()
+	defer ft.srv.Close()
+	ft.daoDelay = 300 * time.Millisecond
+	c, _, _ := newTestCollector(t, dev.URL, ft.srv.URL)
+	c.forwardBatch = 2 // muitos POSTs lentos → dá tempo de desligar no meio
+	c.lastSync, c.lastClockSync = time.Now(), time.Now()
+	_ = c.cursor.Set(40) // a coleta normal já está em dia: o 1º ciclo não envia nada
+	ft.setPending(`{"startId":0,"fromUnix":0,"toUnix":0,"commandId":"cmd-shut"}`)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { c.Run(ctx); close(done) }()
+	deadline := time.Now().Add(3 * time.Second)
+	for !c.FullSyncRunning() {
+		if time.Now().After(deadline) {
+			t.Fatal("refill remoto não começou")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+	cancel() // "serviço parando"
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("Run não voltou após o desligamento")
+	}
+	var last map[string]any
+	for _, a := range ft.ackList() {
+		if a["commandId"] == "cmd-shut" {
+			last = a
+		}
+	}
+	if last == nil || last["status"] != "failed" {
+		t.Fatalf("o último ack antes de Run voltar deveria ser failed; acks=%+v", ft.ackList())
+	}
+	if !c.ResumableRefill() {
+		t.Error("o progresso do refill interrompido deveria ficar salvo para retomar")
+	}
+}
+
+// "Retomar" sem nada salvo é erro (antes virava um refill total desde o id 0).
+func TestResumeWithoutProgressIsRejected(t *testing.T) {
+	dev := fakeDevice(t, []fakeLog{{ID: 1, Time: "1700000001", User: "100"}}, nil)
+	defer dev.Close()
+	ft := newFakeThera()
+	defer ft.srv.Close()
+	c, _, _ := newTestCollector(t, dev.URL, ft.srv.URL)
+	if err := c.StartRefill(RefillRequest{StartID: -1}); !errors.Is(err, ErrNothingToResume) {
+		t.Fatalf("esperava ErrNothingToResume, veio %v", err)
+	}
+	if _, err := c.Refill(context.Background(), RefillRequest{StartID: -1}); !errors.Is(err, ErrNothingToResume) {
+		t.Fatalf("Refill direto: esperava ErrNothingToResume, veio %v", err)
+	}
+	if n := len(ft.sent()); n != 0 {
+		t.Fatalf("nada deveria ser enviado; enviados=%d", n)
+	}
+}
+
+// Retomar um refill de PERÍODO continua com o mesmo período (antes virava total).
+func TestResumeKeepsOriginalPeriod(t *testing.T) {
+	logs := []fakeLog{
+		{ID: 1, Time: "1700000100", User: "100"},
+		{ID: 2, Time: "1700000200", User: "100"},
+		{ID: 3, Time: "1700000300", User: "100"},
+		{ID: 4, Time: "1700000400", User: "100"},
+	}
+	dev := fakeDevice(t, logs, map[string]string{"100": "1"})
+	defer dev.Close()
+	ft := newFakeThera()
+	defer ft.srv.Close()
+	c, _, _ := newTestCollector(t, dev.URL, ft.srv.URL)
+	// Simula um refill do período [150,350] interrompido logo após o id 1.
+	_ = c.fullCursor.Set(1)
+	c.saveRefillPeriod(1700000150, 1700000350)
+	if _, err := c.Refill(context.Background(), RefillRequest{StartID: -1}); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, v := range ft.sent() {
+		got[v["id"]] = true
+	}
+	if !got["2"] || !got["3"] || got["4"] || len(ft.sent()) != 2 {
+		t.Fatalf("retomada deveria respeitar o período (só 2 e 3), veio %+v", ft.sent())
+	}
+	if c.ResumableRefill() {
+		t.Error("refill concluído não deveria continuar retomável")
 	}
 }

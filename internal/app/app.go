@@ -15,14 +15,19 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/p-lacerda/pontopar-coletor/internal/applog"
 	"github.com/p-lacerda/pontopar-coletor/internal/audit"
+	"github.com/p-lacerda/pontopar-coletor/internal/autorun"
 	"github.com/p-lacerda/pontopar-coletor/internal/collector"
 	"github.com/p-lacerda/pontopar-coletor/internal/config"
 	"github.com/p-lacerda/pontopar-coletor/internal/idface"
@@ -47,7 +52,8 @@ type Supervisor struct {
 	col    *collector.Collector
 	runCtx context.Context
 
-	reload chan struct{}
+	reload        chan struct{}
+	reloadPending atomic.Bool // config salva esperando o refill terminar
 }
 
 // NewSupervisor cria o supervisor. interactive=true no modo "run" (foreground):
@@ -99,6 +105,22 @@ func (s *Supervisor) Run(ctx context.Context) {
 			<-done
 			return
 		case <-s.reload:
+			// Nunca interrompe um refill para recarregar: a config já está salva
+			// e passa a valer assim que ele terminar.
+			if col.FullSyncRunning() {
+				s.log.Infof("configuração salva; recarga adiada até o refill terminar")
+				s.reloadPending.Store(true)
+				for col.FullSyncRunning() {
+					select {
+					case <-ctx.Done():
+						cancel()
+						<-done
+						return
+					case <-time.After(2 * time.Second):
+					}
+				}
+			}
+			s.reloadPending.Store(false)
 			s.log.Infof("recarregando configuração do coletor…")
 			cancel()
 			<-done
@@ -113,6 +135,27 @@ func (s *Supervisor) Run(ctx context.Context) {
 	}
 }
 
+// PanelFile é o arquivo (na pasta de dados) onde o serviço publica o endereço
+// REAL do painel e o token de mutação, para o app da bandeja. Mesma confiança do
+// config.json. O endereço vem daqui (e não do config) porque uma troca de porta
+// no config só vale quando o serviço reinicia.
+const PanelFile = "panel.json"
+
+// PanelInfo é o conteúdo de panel.json.
+type PanelInfo struct {
+	Addr  string `json:"addr"`
+	Token string `json:"token"`
+}
+
+// ReadPanelInfo lê panel.json da pasta de dados (zero se ausente).
+func ReadPanelInfo(dir string) PanelInfo {
+	var pi PanelInfo
+	if data, err := os.ReadFile(filepath.Join(dir, PanelFile)); err == nil {
+		_ = json.Unmarshal(data, &pi)
+	}
+	return pi
+}
+
 func (s *Supervisor) startPanel(ctx context.Context) {
 	addr := "127.0.0.1:47114"
 	enabled := true
@@ -125,11 +168,34 @@ func (s *Supervisor) startPanel(ctx context.Context) {
 		return
 	}
 	srv := webui.NewServer(s, addr, s.log)
+	if data, err := json.Marshal(PanelInfo{Addr: addr, Token: srv.Token()}); err == nil {
+		_ = os.WriteFile(filepath.Join(s.dir, PanelFile), data, 0o644)
+	}
 	go func() {
-		if err := srv.Serve(ctx); err != nil {
-			// Bind falhou (porta ocupada, etc.): loga e segue. A coleta não depende
-			// do painel.
-			s.log.Errorf("painel web indisponível (%v) — a coleta continua normal", err)
+		// O bind pode falhar por alguns segundos (ex.: o app da bandeja ainda
+		// está liberando o painel do modo setup logo após instalar). Tenta de
+		// novo até conseguir; a coleta nunca depende do painel.
+		warned := false
+		for {
+			ln, err := srv.Listen()
+			if err == nil {
+				if warned {
+					s.log.Infof("painel web disponível novamente")
+				}
+				if err := srv.ServeListener(ctx, ln); err != nil {
+					s.log.Errorf("painel web parou (%v) — a coleta continua normal", err)
+				}
+				return
+			}
+			if !warned {
+				s.log.Errorf("painel web indisponível (%v) — tentando de novo; a coleta continua normal", err)
+				warned = true
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+			}
 		}
 	}()
 }
@@ -179,8 +245,47 @@ func (s *Supervisor) signalReload() {
 
 // ---- webui.Controller ----
 
-func (s *Supervisor) Version() string          { return s.version }
-func (s *Supervisor) Snapshot() state.Snapshot { return s.st.Get() }
+func (s *Supervisor) Mode() string    { return webui.ModeService }
+func (s *Supervisor) Version() string { return s.version }
+func (s *Supervisor) Snapshot() state.Snapshot {
+	snap := s.st.Get()
+	if col, _ := s.current(); col != nil {
+		snap.RefillResumable = !snap.FullSyncRunning && col.ResumableRefill()
+	}
+	snap.ReloadPending = s.reloadPending.Load()
+	return snap
+}
+func (s *Supervisor) DataDir() string     { return s.dir }
+func (s *Supervisor) TrayAutoStart() bool { return autorun.Enabled() }
+func (s *Supervisor) Install() error      { return fmt.Errorf("o coletor já está instalado e rodando") }
+
+// CollectNow acorda o coletor para coletar imediatamente.
+func (s *Supervisor) CollectNow() error {
+	col, _ := s.current()
+	if col == nil {
+		return fmt.Errorf("coletor não está ativo (configuração inválida?)")
+	}
+	col.CollectNow()
+	return nil
+}
+
+// CancelRefill interrompe o refill em andamento (retomável).
+func (s *Supervisor) CancelRefill() error {
+	col, _ := s.current()
+	if col == nil || !col.CancelRefill() {
+		return fmt.Errorf("não há refill em andamento")
+	}
+	return nil
+}
+
+// Restart recarrega o coletor (relê a config e refaz as sessões).
+func (s *Supervisor) Restart() error {
+	if col, _ := s.current(); col != nil && col.FullSyncRunning() {
+		return fmt.Errorf("há um refill em andamento — reinicie a coleta depois que ele terminar")
+	}
+	s.signalReload()
+	return nil
+}
 
 func (s *Supervisor) ServiceStatus() string {
 	st, err := winservice.Status()
@@ -236,14 +341,13 @@ func (s *Supervisor) LogTail(maxBytes int) string {
 }
 
 func (s *Supervisor) CurrentConfig() *config.Config {
-	_, cfg := s.current()
-	if cfg != nil {
-		return cfg
-	}
-	// Config inválida/ausente: devolve o que estiver no disco ou os defaults, para
-	// o formulário poder ser preenchido e corrigido.
+	// O DISCO primeiro: com a recarga adiada (refill rodando), a config em memória
+	// é a antiga — mostrá-la no formulário e salvar de novo desfaria a alteração.
 	if loaded, err := config.Load(s.dir); err == nil {
 		return loaded
+	}
+	if _, cfg := s.current(); cfg != nil {
+		return cfg
 	}
 	return config.Default()
 }
@@ -259,43 +363,53 @@ func (s *Supervisor) SaveConfig(cfg *config.Config) error {
 // TriggerFullSync dispara o full-sync em segundo plano. startID<0 retoma; 0 começa
 // do início. fromUnix/toUnix (epoch em segundos; 0 = sem limite) recortam o
 // período — se ambos 0, é o histórico total.
-func (s *Supervisor) TriggerFullSync(startID, fromUnix, toUnix int64) error {
+func (s *Supervisor) TriggerFullSync(startID, fromUnix, toUnix int64, source string) error {
 	col, _ := s.current()
 	if col == nil {
 		return fmt.Errorf("coletor não está ativo (config inválida?)")
 	}
-	if col.FullSyncRunning() {
-		return fmt.Errorf("um full-sync já está em andamento")
+	if source == "" {
+		source = collector.SourcePanel
 	}
-	ctx := s.runCtx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	note := "disparado pelo painel"
-	if fromUnix > 0 || toUnix > 0 {
-		note = "disparado pelo painel (período)"
-	}
-	go func() {
-		// Timeout generoso: um histórico grande pode levar minutos.
-		fsCtx, cancel := context.WithTimeout(ctx, 60*time.Minute)
-		defer cancel()
-		if _, err := col.FullSync(fsCtx, startID, fromUnix, toUnix, note); err != nil {
-			s.log.Errorf("full-sync terminou com erro: %v", err)
+	req := collector.RefillRequest{StartID: startID, FromUnix: fromUnix, ToUnix: toUnix, Source: source}
+	if err := col.StartRefill(req); err != nil {
+		if errors.Is(err, collector.ErrRefillRunning) {
+			return fmt.Errorf("um refill já está em andamento — acompanhe o progresso no painel")
 		}
-	}()
+		return err
+	}
+	s.log.Infof("refill pedido pelo %s (startId=%d, período %d..%d)", source, startID, fromUnix, toUnix)
 	return nil
 }
 
-func (s *Supervisor) TestDevice() error {
-	cfg := s.CurrentConfig()
+// TestDevice/TestThera testam a config dada (a do formulário) ou, sem ela, a em uso.
+func (s *Supervisor) TestDevice(cfg *config.Config) error {
+	if cfg == nil {
+		cfg = s.CurrentConfig()
+	}
+	return TestDeviceConn(cfg, s.log)
+}
+
+func (s *Supervisor) TestThera(cfg *config.Config) error {
+	if cfg == nil {
+		cfg = s.CurrentConfig()
+	}
+	return TestTheraConn(cfg)
+}
+
+// TestDeviceConn faz login no relógio com a config dada (teste sob demanda).
+func TestDeviceConn(cfg *config.Config, log idface.Logger) error {
+	if log == nil {
+		log = nopLogger{}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	dev := idface.New(cfg.DeviceBase(), cfg.Login, cfg.Password, &http.Client{Timeout: 6 * time.Second}, s.log)
+	dev := idface.New(cfg.DeviceBase(), cfg.Login, cfg.Password, &http.Client{Timeout: 6 * time.Second}, log)
 	return dev.EnsureSession(ctx)
 }
 
-func (s *Supervisor) TestThera() error {
-	cfg := s.CurrentConfig()
+// TestTheraConn busca o manifesto do Thera com a config dada (valida endereço+segredo).
+func TestTheraConn(cfg *config.Config) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 	api := thera.New(cfg.TheraDaoURL(), &http.Client{Timeout: 10 * time.Second})
@@ -303,6 +417,16 @@ func (s *Supervisor) TestThera() error {
 	return err
 }
 
+type nopLogger struct{}
+
+func (nopLogger) Infof(string, ...any)  {}
+func (nopLogger) Errorf(string, ...any) {}
+
 func (s *Supervisor) SetAutoStart(enable bool) error { return winservice.SetAutoStart(enable) }
-func (s *Supervisor) StartService() error            { return winservice.Start() }
-func (s *Supervisor) StopService() error             { return winservice.Stop() }
+func (s *Supervisor) StartService() error {
+	if err := winservice.Start(); err != nil && !errors.Is(err, winservice.ErrAlreadyRunning) {
+		return err
+	}
+	return nil
+}
+func (s *Supervisor) StopService() error { return winservice.Stop() }

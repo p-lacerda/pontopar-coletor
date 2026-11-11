@@ -365,3 +365,65 @@ func (c *Config) Validate() error {
 	}
 	return nil
 }
+
+// InstallFile é o arquivo que o instalador (Inno Setup) grava com SÓ os campos
+// do assistente (IP, credenciais, Thera, facial). O coletor o mescla sobre o
+// config.json existente em vez de o instalador sobrescrever o arquivo inteiro —
+// antes, cada reinstalação apagava a matrícula manual (batidas sem matrícula são
+// descartadas no Thera) e zerava o token do auto-update.
+const InstallFile = "install-config.json"
+
+// ApplyInstallFile mescla <dir>/install-config.json sobre o config.json (ou
+// sobre os defaults, numa instalação nova), grava com Save e apaga o arquivo.
+// Devolve applied=false quando não há arquivo de instalação.
+func ApplyInstallFile(dir string) (applied bool, err error) {
+	ipath := filepath.Join(dir, InstallFile)
+	data, err := os.ReadFile(ipath)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("ler %s: %w", InstallFile, err)
+	}
+	var patch map[string]any
+	if err := json.Unmarshal(data, &patch); err != nil {
+		return false, fmt.Errorf("%s inválido: %w", InstallFile, err)
+	}
+	base := map[string]any{}
+	existing, rerr := os.ReadFile(Path(dir))
+	if rerr != nil || json.Unmarshal(existing, &base) != nil {
+		base = map[string]any{}
+		def, _ := json.Marshal(Default())
+		_ = json.Unmarshal(def, &base)
+	}
+	deepMerge(base, patch)
+	merged, err := json.Marshal(base)
+	if err != nil {
+		return false, err
+	}
+	var c Config
+	if err := json.Unmarshal(merged, &c); err != nil {
+		return false, fmt.Errorf("configuração mesclada inválida: %w", err)
+	}
+	if c.Facial.IdentificationDistanceCm == 0 {
+		c.Facial = Default().Facial
+	}
+	if err := Save(dir, &c); err != nil {
+		return false, err
+	}
+	_ = os.Remove(ipath)
+	return true, nil
+}
+
+// deepMerge copia patch sobre base; objetos aninhados são mesclados campo a campo.
+func deepMerge(base, patch map[string]any) {
+	for k, v := range patch {
+		if pm, ok := v.(map[string]any); ok {
+			if bm, ok := base[k].(map[string]any); ok {
+				deepMerge(bm, pm)
+				continue
+			}
+		}
+		base[k] = v
+	}
+}

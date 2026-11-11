@@ -4,285 +4,1213 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="pontopar-token" content="{{TOKEN}}">
-<title>PontoPar Coletor — Painel</title>
+<meta name="pontopar-mode" content="{{MODE}}">
+<meta name="color-scheme" content="light dark">
+<title>PontoPar Coletor</title>
+<link rel="icon" type="image/png" href="/favicon.png">
+<script>
+  // Tema antes do primeiro paint (sem "piscar" claro→escuro).
+  try { const t = localStorage.getItem('pp-theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
 <style>
   :root{
-    --bg:#0f1420; --panel:#171e2e; --panel2:#1e2740; --line:#2a344e;
-    --text:#e7ecf6; --muted:#9aa7c2; --accent:#4f8cff; --accent2:#2f6bd6;
-    --ok:#36c08a; --bad:#ff6b6b; --warn:#f2b84b;
+    --brand:#6d28d9; --brand-600:#5b21b6; --brand-400:#8b5cf6; --brand-50:#f5f3ff; --brand-100:#ede9fe;
+    --coral:#f97360; --coral-50:#fff1ee;
+    --side-1:#1b0f30; --side-2:#2b1554; --side-text:#e9e3f7; --side-muted:#a99cc8; --side-line:rgba(255,255,255,.08);
+    --bg:#f6f5fa; --card:#ffffff; --sunken:#f8f7fc; --line:#e9e6f1; --line-2:#f1eff6;
+    --text:#1a1430; --muted:#69637f; --faint:#9b96ad;
+    --ok:#0f9d63; --ok-bg:#e7f7ef; --ok-line:#bfe8d3;
+    --warn:#c26a00; --warn-bg:#fff5e3; --warn-line:#f6dcaa;
+    --bad:#d93a40; --bad-bg:#fdeced; --bad-line:#f5c2c4;
+    --idle:#6b6585; --idle-bg:#f1eff6;
+    --shadow-sm:0 1px 2px rgba(26,20,48,.05);
+    --shadow:0 1px 2px rgba(26,20,48,.04),0 6px 24px -8px rgba(26,20,48,.10);
+    --shadow-lg:0 24px 60px -12px rgba(26,20,48,.35);
+    --r:16px; --r-sm:10px;
+    --mono:ui-monospace,"Cascadia Mono","Cascadia Code",Consolas,Menlo,monospace;
+    color-scheme:light;
   }
+  :root[data-theme="dark"]{
+    --bg:#0e0918; --card:#17112a; --sunken:#120d21; --line:#2a2242; --line-2:#201935;
+    --text:#f1edfa; --muted:#a79fbf; --faint:#7b7394;
+    --brand-50:rgba(139,92,246,.13); --brand-100:rgba(139,92,246,.22); --coral-50:rgba(249,115,96,.12);
+    --ok:#34d399; --ok-bg:rgba(52,211,153,.12); --ok-line:rgba(52,211,153,.28);
+    --warn:#fbbf24; --warn-bg:rgba(251,191,36,.11); --warn-line:rgba(251,191,36,.28);
+    --bad:#fb7185; --bad-bg:rgba(251,113,133,.12); --bad-line:rgba(251,113,133,.3);
+    --idle:#a79fbf; --idle-bg:rgba(167,159,191,.12);
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 28px -10px rgba(0,0,0,.5);
+    color-scheme:dark;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0e0918; --card:#17112a; --sunken:#120d21; --line:#2a2242; --line-2:#201935;
+      --text:#f1edfa; --muted:#a79fbf; --faint:#7b7394;
+      --brand-50:rgba(139,92,246,.13); --brand-100:rgba(139,92,246,.22); --coral-50:rgba(249,115,96,.12);
+      --ok:#34d399; --ok-bg:rgba(52,211,153,.12); --ok-line:rgba(52,211,153,.28);
+      --warn:#fbbf24; --warn-bg:rgba(251,191,36,.11); --warn-line:rgba(251,191,36,.28);
+      --bad:#fb7185; --bad-bg:rgba(251,113,133,.12); --bad-line:rgba(251,113,133,.3);
+      --idle:#a79fbf; --idle-bg:rgba(167,159,191,.12);
+      --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 28px -10px rgba(0,0,0,.5);
+      color-scheme:dark;
+    }
+  }
+
   *{box-sizing:border-box}
+  html,body{height:100%}
   body{margin:0;background:var(--bg);color:var(--text);
-    font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45}
-  header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;
-    padding:14px 20px;background:linear-gradient(180deg,#141b2b,#10151f);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
-  header h1{font-size:17px;margin:0;font-weight:650;letter-spacing:.2px}
-  header .ver{color:var(--muted);font-size:12px}
-  .spacer{flex:1}
-  .badge{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border-radius:20px;
-    background:var(--panel2);border:1px solid var(--line);font-size:12.5px;font-weight:600}
-  .dot{width:9px;height:9px;border-radius:50%;background:var(--muted)}
-  .dot.on{background:var(--ok);box-shadow:0 0 8px #36c08a88}
-  .dot.off{background:var(--bad);box-shadow:0 0 8px #ff6b6b88}
-  main{max-width:1180px;margin:0 auto;padding:20px;display:grid;gap:18px}
-  .grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(210px,1fr))}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
-  .card h3{margin:0 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600}
-  .card .big{font-size:24px;font-weight:700}
-  .card .sub{color:var(--muted);font-size:12px;margin-top:3px;word-break:break-all}
-  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
-  .panel>h2{margin:0 0 14px;font-size:15px;font-weight:650;display:flex;align-items:center;gap:9px}
-  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-  label{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}
-  input,select,textarea{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--text);
-    border-radius:8px;padding:9px 11px;font-size:13.5px;font-family:inherit}
-  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
-  textarea{min-height:76px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
-  .formgrid{display:grid;gap:12px 16px;grid-template-columns:repeat(auto-fill,minmax(230px,1fr))}
-  .field{min-width:0}
-  button{background:var(--accent);color:#fff;border:0;border-radius:9px;padding:10px 16px;
-    font-size:13.5px;font-weight:650;cursor:pointer}
-  button:hover{background:var(--accent2)}
-  button.ghost{background:var(--panel2);border:1px solid var(--line);color:var(--text)}
-  button.ghost:hover{background:#28324e}
-  button.danger{background:#3a2330;border:1px solid #6b3450;color:#ffb3c7}
-  button:disabled{opacity:.5;cursor:not-allowed}
-  .hint{color:var(--muted);font-size:12px}
-  table{width:100%;border-collapse:collapse;font-size:12.5px}
-  th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line);white-space:nowrap}
-  th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.4px}
-  td.num{text-align:right;font-variant-numeric:tabular-nums}
-  .pill{padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700}
-  .pill.full{background:#1e3a5f;color:#9cc4ff}
-  .pill.incremental{background:#243b2f;color:#8fe0b8}
-  .pill.err{background:#4a2330;color:#ff9db0}
-  pre.log{background:#0b1019;border:1px solid var(--line);border-radius:10px;padding:12px;
-    height:300px;overflow:auto;font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#c7d2e8;margin:0;white-space:pre-wrap;word-break:break-word}
-  .toast{position:fixed;right:18px;bottom:18px;background:var(--panel2);border:1px solid var(--line);
-    border-radius:10px;padding:12px 16px;max-width:360px;box-shadow:0 10px 30px #0008;opacity:0;transform:translateY(8px);
-    transition:.2s;pointer-events:none;z-index:50}
-  .toast.show{opacity:1;transform:none}
-  .toast.ok{border-color:#2a6b52}.toast.bad{border-color:#6b2a37}
-  .switch{position:relative;display:inline-block;width:46px;height:26px}
-  .switch input{display:none}
-  .slider{position:absolute;inset:0;background:var(--panel2);border:1px solid var(--line);border-radius:20px;transition:.2s;cursor:pointer}
-  .slider:before{content:"";position:absolute;width:18px;height:18px;left:3px;top:3px;background:#cdd6ea;border-radius:50%;transition:.2s}
-  .switch input:checked + .slider{background:var(--ok)}
-  .switch input:checked + .slider:before{transform:translateX(20px);background:#fff}
-  .muted{color:var(--muted)}
-  .warnbox{background:#2a2410;border:1px solid #5a4a16;color:#f2d894;border-radius:9px;padding:10px 13px;font-size:12.5px;margin-top:10px}
-  code{background:var(--panel2);padding:1px 6px;border-radius:5px;font-size:12px}
+    font:14px/1.5 "Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  button,input,select,textarea{font:inherit;color:inherit}
+  a{color:var(--brand)}
+  [hidden]{display:none!important}
+  .ic{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+  .ic.lg{width:22px;height:22px}
+  .num{font-variant-numeric:tabular-nums}
+  .mono{font-family:var(--mono)}
+
+  /* ---------- layout ---------- */
+  .app{display:grid;grid-template-columns:248px minmax(0,1fr);min-height:100vh}
+  aside{position:sticky;top:0;height:100vh;display:flex;flex-direction:column;
+    background:radial-gradient(120% 60% at 0% 0%,#3b1a72 0%,transparent 60%),linear-gradient(180deg,var(--side-2),var(--side-1));
+    color:var(--side-text);padding:22px 14px 16px}
+  .brand{display:flex;align-items:center;gap:12px;padding:2px 10px 22px}
+  .brand-mark{width:40px;height:40px;border-radius:12px;background:#fff;display:grid;place-items:center;
+    box-shadow:0 6px 18px -6px rgba(0,0,0,.5)}
+  .brand-mark img{width:30px;height:30px}
+  .brand b{display:block;font-size:15.5px;letter-spacing:.1px}
+  .brand span{display:block;font-size:12px;color:var(--side-muted)}
+  .nav{display:flex;flex-direction:column;gap:3px}
+  .nav a{display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:11px;color:var(--side-muted);
+    text-decoration:none;font-weight:550;transition:background .15s,color .15s}
+  .nav a:hover{background:rgba(255,255,255,.06);color:var(--side-text)}
+  .nav a.active{background:rgba(255,255,255,.11);color:#fff;box-shadow:inset 0 0 0 1px rgba(255,255,255,.06)}
+  .nav a .tag{margin-left:auto;font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:20px;background:var(--coral);color:#fff}
+  .side-foot{margin-top:auto;border-top:1px solid var(--side-line);padding:14px 10px 0;display:grid;gap:10px;font-size:12.5px}
+  .side-row{display:flex;align-items:center;gap:8px;color:var(--side-muted)}
+  .side-row b{color:var(--side-text);font-weight:600}
+  .theme-btn{display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,.06);border:1px solid var(--side-line);
+    color:var(--side-text);border-radius:9px;padding:6px 10px;cursor:pointer;font-size:12.5px}
+  .theme-btn:hover{background:rgba(255,255,255,.1)}
+
+  main{min-width:0;padding:28px 34px 90px;max-width:1240px;width:100%}
+  .page-head{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:22px}
+  .page-head h1{margin:0;font-size:24px;letter-spacing:-.3px;font-weight:700}
+  .page-head p{margin:3px 0 0;color:var(--muted)}
+  .page-head .actions{margin-left:auto;display:flex;gap:10px;flex-wrap:wrap}
+
+  /* ---------- primitives ---------- */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}
+  .card-pad{padding:20px 22px}
+  .card-head{display:flex;align-items:center;gap:10px;padding:16px 22px;border-bottom:1px solid var(--line-2)}
+  .card-head h2{margin:0;font-size:15px;font-weight:650}
+  .card-head .hint{margin-left:auto}
+  .hint{color:var(--muted);font-size:12.5px}
+  .muted{color:var(--muted)} .faint{color:var(--faint)}
+  .grid{display:grid;gap:16px}
+  .g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .split{display:grid;gap:16px;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr)}
+  .stack{display:grid;gap:16px}
+
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:38px;text-decoration:none;padding:0 16px;border-radius:11px;
+    border:1px solid transparent;background:var(--brand);color:#fff;font-weight:650;cursor:pointer;white-space:nowrap;
+    box-shadow:0 1px 0 rgba(255,255,255,.15) inset,0 6px 16px -8px rgba(109,40,217,.7);transition:transform .06s,background .15s,box-shadow .15s}
+  .btn:hover{background:var(--brand-600)}
+  .btn:active{transform:translateY(1px)}
+  .btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+  .btn.lg{height:46px;padding:0 22px;font-size:15px;border-radius:13px}
+  .btn.ghost{background:var(--card);color:var(--text);border-color:var(--line);box-shadow:var(--shadow-sm)}
+  .btn.ghost:hover{background:var(--sunken);border-color:var(--faint)}
+  .btn.soft{background:var(--brand-50);color:var(--brand);box-shadow:none}
+  .btn.soft:hover{background:var(--brand-100)}
+  :root[data-theme="dark"] .btn.soft{color:#c4b5fd}
+  .btn.danger{background:var(--card);color:var(--bad);border-color:var(--bad-line);box-shadow:none}
+  .btn.danger:hover{background:var(--bad-bg)}
+  .btn.sm{height:32px;padding:0 12px;font-size:13px;border-radius:9px}
+  .btn .spin{display:none}
+  .btn.loading .spin{display:inline-block}
+  .btn.loading .ic:not(.spin){display:none}
+  .spin{animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:650;
+    background:var(--idle-bg);color:var(--idle);white-space:nowrap}
+  .pill.ok{background:var(--ok-bg);color:var(--ok)} .pill.warn{background:var(--warn-bg);color:var(--warn)}
+  .pill.bad{background:var(--bad-bg);color:var(--bad)} .pill.brand{background:var(--brand-50);color:var(--brand)}
+  :root[data-theme="dark"] .pill.brand{color:#c4b5fd}
+  .dot{width:8px;height:8px;border-radius:50%;background:currentColor;flex:none}
+  .dot.pulse{box-shadow:0 0 0 0 currentColor;animation:pulse 2s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,currentColor 55%,transparent)}70%{box-shadow:0 0 0 7px transparent}100%{box-shadow:0 0 0 0 transparent}}
+
+  /* ---------- hero ---------- */
+  .hero{position:relative;overflow:hidden;display:flex;align-items:center;gap:20px;padding:24px 26px;border-radius:20px;
+    border:1px solid var(--line);background:var(--card);box-shadow:var(--shadow);margin-bottom:16px}
+  .hero::before{content:"";position:absolute;inset:0;background:radial-gradient(90% 140% at 0% 0%,var(--tone-bg),transparent 65%);pointer-events:none}
+  .hero > *{position:relative}
+  .hero-icon{width:58px;height:58px;border-radius:17px;display:grid;place-items:center;flex:none;
+    background:var(--tone-bg);color:var(--tone);box-shadow:inset 0 0 0 1px var(--tone-line)}
+  .hero-icon .ic{width:28px;height:28px;stroke-width:2}
+  .hero h2{margin:0;font-size:21px;letter-spacing:-.2px;display:flex;align-items:center;gap:10px}
+  .hero p{margin:4px 0 0;color:var(--muted);max-width:640px}
+  .hero .detail{margin-top:8px;font-family:var(--mono);font-size:12px;color:var(--tone);opacity:.9;word-break:break-word}
+  .hero .hero-act{margin-left:auto;display:flex;gap:10px;flex-wrap:wrap}
+  .tone-ok{--tone:var(--ok);--tone-bg:var(--ok-bg);--tone-line:var(--ok-line)}
+  .tone-warn{--tone:var(--warn);--tone-bg:var(--warn-bg);--tone-line:var(--warn-line)}
+  .tone-bad{--tone:var(--bad);--tone-bg:var(--bad-bg);--tone-line:var(--bad-line)}
+  .tone-brand{--tone:var(--brand);--tone-bg:var(--brand-50);--tone-line:var(--brand-100)}
+  .tone-idle{--tone:var(--idle);--tone-bg:var(--idle-bg);--tone-line:var(--line)}
+  :root[data-theme="dark"] .tone-brand{--tone:#c4b5fd}
+
+  /* ---------- connection cards ---------- */
+  .conn{display:flex;gap:14px;padding:18px 20px;align-items:flex-start}
+  .conn-ic{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;flex:none;background:var(--brand-50);color:var(--brand)}
+  :root[data-theme="dark"] .conn-ic{color:#c4b5fd}
+  .conn-body{flex:1;min-width:0}
+  .conn-top{display:flex;align-items:center;gap:10px;justify-content:space-between;min-height:26px}
+  .conn .t{font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .conn .s{color:var(--muted);font-size:12.5px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  /* ---------- KPIs ---------- */
+  .kpi{padding:18px 20px}
+  .kpi .l{color:var(--muted);font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:7px}
+  .kpi .v{font-size:30px;font-weight:720;letter-spacing:-.8px;margin-top:6px;line-height:1.1}
+  .kpi .v small{font-size:14px;font-weight:600;color:var(--muted);letter-spacing:0;margin-left:4px}
+  .kpi .f{color:var(--faint);font-size:12px;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  /* ---------- feed ---------- */
+  .feed{list-style:none;margin:0;padding:6px 10px 10px;max-height:430px;overflow:auto}
+  .feed li{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:12px}
+  .feed li:hover{background:var(--sunken)}
+  .feed li.new{animation:flash 1.6s ease-out}
+  @keyframes flash{from{background:var(--brand-50)}to{background:transparent}}
+  .av{width:36px;height:36px;border-radius:11px;display:grid;place-items:center;flex:none;font-weight:700;font-size:12.5px;
+    background:linear-gradient(135deg,var(--brand-50),var(--coral-50));color:var(--brand)}
+  :root[data-theme="dark"] .av{color:#c4b5fd}
+  .feed .who{font-weight:620}
+  .feed .sub{color:var(--muted);font-size:12.5px}
+  .feed .when{margin-left:auto;text-align:right}
+  .feed .when b{display:block;font-variant-numeric:tabular-nums}
+  .empty{padding:34px 20px;text-align:center;color:var(--muted)}
+  .empty .ic{width:34px;height:34px;color:var(--faint);margin-bottom:6px}
+
+  /* ---------- refill ---------- */
+  .tiles{display:grid;gap:12px;grid-template-columns:repeat(3,minmax(0,1fr))}
+  .tile{position:relative;text-align:left;border:1.5px solid var(--line);background:var(--card);border-radius:14px;padding:16px 16px 15px;cursor:pointer;
+    transition:border-color .15s,box-shadow .15s,background .15s}
+  .tile:hover{border-color:var(--brand-400)}
+  .tile.on{border-color:var(--brand);box-shadow:0 0 0 4px var(--brand-50);background:linear-gradient(180deg,var(--brand-50),transparent 70%)}
+  .tile .ti{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;background:var(--brand-50);color:var(--brand);margin-bottom:10px}
+  :root[data-theme="dark"] .tile .ti{color:#c4b5fd}
+  .tile b{display:block;font-size:14.5px}
+  .tile span{display:block;color:var(--muted);font-size:12.5px;margin-top:3px}
+  .tile .check{position:absolute;top:14px;right:14px;width:20px;height:20px;border-radius:50%;border:1.5px solid var(--line);display:grid;place-items:center}
+  .tile.on .check{background:var(--brand);border-color:var(--brand);color:#fff}
+  .tile .check .ic{width:12px;height:12px;stroke-width:3;opacity:0}
+  .tile.on .check .ic{opacity:1}
+  .chips{display:flex;gap:8px;flex-wrap:wrap}
+  .chip{border:1px solid var(--line);background:var(--card);border-radius:999px;padding:6px 13px;font-size:13px;font-weight:600;cursor:pointer;color:var(--muted)}
+  .chip:hover{border-color:var(--brand-400);color:var(--text)}
+  .chip.on{background:var(--brand);border-color:var(--brand);color:#fff}
+  .dates{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+  .dates .field{width:190px}
+  .refill-cta{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding-top:4px}
+  .explain{display:flex;gap:12px;padding:14px 16px;border-radius:13px;background:var(--brand-50);color:var(--text);font-size:13.5px}
+  .explain .ic{color:var(--brand);margin-top:2px}
+  :root[data-theme="dark"] .explain .ic{color:#c4b5fd}
+
+  .progress{height:10px;border-radius:99px;background:var(--line-2);overflow:hidden}
+  .progress > i{display:block;height:100%;width:0;border-radius:99px;background:linear-gradient(90deg,var(--brand),var(--coral));transition:width .6s ease}
+  .progress.indet > i{width:35%!important;animation:indet 1.4s ease-in-out infinite}
+  @keyframes indet{0%{transform:translateX(-100%)}100%{transform:translateX(300%)}}
+  .stats{display:grid;gap:10px;grid-template-columns:repeat(4,minmax(0,1fr))}
+  .stat{background:var(--sunken);border:1px solid var(--line-2);border-radius:12px;padding:11px 13px}
+  .stat .l{font-size:12px;color:var(--muted);font-weight:600}
+  .stat .v{font-size:20px;font-weight:720;letter-spacing:-.4px;margin-top:2px}
+  .stat.warn .v{color:var(--warn)} .stat.bad .v{color:var(--bad)} .stat.ok .v{color:var(--ok)}
+  .insight{display:flex;gap:11px;padding:12px 14px;border-radius:12px;border:1px solid;font-size:13.5px;margin-top:10px}
+  .insight .ic{margin-top:1px}
+  .insight.ok{background:var(--ok-bg);border-color:var(--ok-line);color:var(--text)} .insight.ok .ic{color:var(--ok)}
+  .insight.warn{background:var(--warn-bg);border-color:var(--warn-line)} .insight.warn .ic{color:var(--warn)}
+  .insight.bad{background:var(--bad-bg);border-color:var(--bad-line)} .insight.bad .ic{color:var(--bad)}
+  .insight.info{background:var(--brand-50);border-color:var(--brand-100)} .insight.info .ic{color:var(--brand)}
+
+  /* ---------- tables ---------- */
+  .table-wrap{overflow:auto}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line-2);white-space:nowrap}
+  th{color:var(--faint);font-weight:650;font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;background:var(--sunken)}
+  td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+  tr:last-child td{border-bottom:0}
+  tbody tr:hover td{background:var(--sunken)}
+
+  /* ---------- forms ---------- */
+  .form-sec{display:grid;grid-template-columns:260px minmax(0,1fr);gap:28px;padding:24px 26px;border-bottom:1px solid var(--line-2)}
+  .form-sec:last-child{border-bottom:0}
+  .form-sec h3{margin:0;font-size:15px}
+  .form-sec .desc{color:var(--muted);font-size:13px;margin-top:4px}
+  .fields{display:grid;gap:14px 16px;grid-template-columns:repeat(2,minmax(0,1fr))}
+  .fields.c3{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .field label{display:block;font-size:12.5px;font-weight:620;color:var(--muted);margin-bottom:6px}
+  .field .help{font-size:12px;color:var(--faint);margin-top:5px}
+  .field.full{grid-column:1/-1}
+  .input{width:100%;height:40px;padding:0 12px;border-radius:10px;border:1px solid var(--line);background:var(--card);outline:none;transition:border-color .15s,box-shadow .15s}
+  textarea.input{height:auto;min-height:84px;padding:10px 12px;font-family:var(--mono);font-size:12.5px;resize:vertical}
+  .input:hover{border-color:var(--faint)}
+  .input:focus{border-color:var(--brand);box-shadow:0 0 0 4px var(--brand-50)}
+  .pw{position:relative}
+  .pw .input{padding-right:42px}
+  .pw button{position:absolute;right:5px;top:5px;width:30px;height:30px;border:0;background:transparent;border-radius:8px;color:var(--faint);cursor:pointer;display:grid;place-items:center}
+  .pw button:hover{background:var(--sunken);color:var(--text)}
+  .seg{display:inline-flex;background:var(--sunken);border:1px solid var(--line);border-radius:11px;padding:3px;gap:3px}
+  .seg button{border:0;background:transparent;border-radius:8px;padding:6px 14px;font-weight:620;color:var(--muted);cursor:pointer}
+  .seg button.on{background:var(--card);color:var(--text);box-shadow:var(--shadow-sm)}
+  .toggle-row{display:flex;align-items:center;gap:14px;padding:12px 0;border-bottom:1px dashed var(--line-2)}
+  .toggle-row:last-child{border-bottom:0}
+  .toggle-row .tx b{display:block;font-weight:620}
+  .toggle-row .tx span{display:block;color:var(--muted);font-size:12.5px}
+  .toggle-row .sw{margin-left:auto}
+  .sw{position:relative;width:44px;height:26px;flex:none;display:inline-block}
+  .sw input{position:absolute;opacity:0;inset:0;margin:0;cursor:pointer;z-index:1}
+  .sw i{position:absolute;inset:0;border-radius:99px;background:var(--line);transition:background .2s}
+  .sw i::after{content:"";position:absolute;left:3px;top:3px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .2s}
+  .sw input:checked + i{background:var(--brand)}
+  .sw input:checked + i::after{transform:translateX(18px)}
+  .sw input:disabled + i{opacity:.45}
+  .sw input:focus-visible + i{box-shadow:0 0 0 4px var(--brand-50)}
+  .test-line{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px}
+  .savebar{position:fixed;left:calc(248px + 50% - 124px);transform:translateX(-50%) translateY(140%);bottom:20px;z-index:40;opacity:0;visibility:hidden;
+    display:flex;align-items:center;gap:12px;padding:10px 10px 10px 18px;border-radius:14px;background:#1b1030;color:#fff;
+    box-shadow:var(--shadow-lg);transition:transform .25s cubic-bezier(.2,.9,.3,1.2);max-width:calc(100vw - 32px)}
+  .savebar.show{transform:translateX(-50%) translateY(0);opacity:1;visibility:visible}
+  .savebar .btn.ghost{background:transparent;color:#fff;border-color:rgba(255,255,255,.2)}
+  .savebar .btn.ghost:hover{background:rgba(255,255,255,.08)}
+
+  /* ---------- logs ---------- */
+  .tabs{display:inline-flex;gap:4px;background:var(--sunken);border:1px solid var(--line);border-radius:12px;padding:4px}
+  .tabs button{border:0;background:transparent;padding:7px 14px;border-radius:9px;font-weight:620;color:var(--muted);cursor:pointer}
+  .tabs button.on{background:var(--card);color:var(--text);box-shadow:var(--shadow-sm)}
+  .log{margin:0;height:min(62vh,560px);overflow:auto;padding:14px 18px;background:#120c20;color:#d9d2ec;border-radius:0 0 var(--r) var(--r);
+    font:12.3px/1.65 var(--mono);white-space:pre-wrap;word-break:break-word}
+  .log .e{color:#ff9aa6} .log .ok{color:#7ee2b8} .log .ts{color:#7f74a3}
+
+  /* ---------- setup banner ---------- */
+  .setup{display:flex;gap:18px;align-items:center;padding:20px 22px;border-radius:18px;margin-bottom:18px;color:#fff;
+    background:radial-gradient(100% 160% at 100% 0%,rgba(249,115,96,.55),transparent 55%),linear-gradient(120deg,#2b1554,#6d28d9)}
+  .setup h2{margin:0;font-size:18px}
+  .setup p{margin:3px 0 0;opacity:.85}
+  .setup ol{margin:8px 0 0;padding-left:18px;opacity:.9}
+  .setup .btn{background:#fff;color:#2b1554;margin-left:auto}
+  .setup .btn:hover{background:#f3efff}
+
+  /* ---------- toast & modal ---------- */
+  .toasts{position:fixed;right:20px;bottom:20px;display:grid;gap:10px;z-index:60;width:min(380px,calc(100vw - 40px))}
+  .toast{display:flex;gap:11px;align-items:flex-start;padding:13px 15px;border-radius:13px;background:var(--card);border:1px solid var(--line);
+    box-shadow:var(--shadow-lg);animation:tin .25s ease-out}
+  .toast.out{animation:tout .2s ease-in forwards}
+  .toast .ic{margin-top:1px}
+  .toast.ok .ic{color:var(--ok)} .toast.bad .ic{color:var(--bad)} .toast.info .ic{color:var(--brand)}
+  @keyframes tin{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:none}}
+  @keyframes tout{to{opacity:0;transform:translateY(6px)}}
+  .modal-bg{position:fixed;inset:0;background:rgba(14,9,24,.55);backdrop-filter:blur(3px);display:grid;place-items:center;z-index:70;padding:20px;animation:fade .15s}
+  @keyframes fade{from{opacity:0}}
+  .modal{width:min(480px,100%);background:var(--card);border:1px solid var(--line);border-radius:20px;box-shadow:var(--shadow-lg);padding:24px;animation:tin .2s ease-out}
+  .modal h3{margin:0;font-size:18px}
+  .modal .body{color:var(--muted);margin:8px 0 20px}
+  .modal .body b{color:var(--text)}
+  .modal .foot{display:flex;gap:10px;justify-content:flex-end}
+
+  body.lost main > .view > .grid, body.lost main > .view > .split, body.lost #rfRunning, body.lost #rfLast{opacity:.5;filter:grayscale(.6);pointer-events:none;transition:opacity .2s}
+  @media (prefers-reduced-motion: reduce){ *,*::before,*::after{animation:none!important;transition:none!important} }
+  @media (max-width: 1080px){ .g4{grid-template-columns:repeat(2,minmax(0,1fr))} .split{grid-template-columns:1fr} .stats{grid-template-columns:repeat(2,minmax(0,1fr))} }
+  @media (max-width: 900px){
+    .app{grid-template-columns:1fr} aside{position:static;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center;padding:12px 14px;gap:10px}
+    .brand{padding:0 6px 0 0} .nav{flex-direction:row;flex-wrap:wrap} .side-foot{display:none}
+    main{padding:20px 16px 90px} .g3,.tiles{grid-template-columns:1fr} .form-sec{grid-template-columns:1fr;gap:14px} .fields,.fields.c3{grid-template-columns:1fr}
+    .savebar{left:50%} .hero{flex-wrap:wrap}
+  }
 </style>
 </head>
 <body>
-<header>
-  <h1>PontoPar Coletor</h1><span class="ver" id="ver">{{VERSION}}</span>
-  <div class="spacer"></div>
-  <span class="badge"><span class="dot" id="dotDevice"></span>Control iD</span>
-  <span class="badge"><span class="dot" id="dotThera"></span>Thera</span>
-  <span class="badge" id="svcBadge">serviço: —</span>
-</header>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-activity" viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></symbol>
+  <symbol id="i-refill" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"/><path d="M3 3v5h5"/><path d="M12 8v4l2.5 1.5"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1.5 14h5M9.5 8h5M17.5 16h5"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6h12M9 12h12M9 18h12"/><path d="M4 6h.01M4 12h.01M4 18h.01" stroke-width="2.6"/></symbol>
+  <symbol id="i-face" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M8.5 14.5s1.3 1.8 3.5 1.8 3.5-1.8 3.5-1.8"/><path d="M9 9.5h.01M15 9.5h.01" stroke-width="2.6"/></symbol>
+  <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></symbol>
+  <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="2.5" y="3.5" width="19" height="13" rx="2.5"/><path d="M8 21h8M12 16.5V21"/></symbol>
+  <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2 4 14h7.5L11 22l9-12h-7.5L13 2z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5"/><path d="m8 12.5 2.7 2.7L16.5 9.5"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></symbol>
+  <symbol id="i-x-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5"/><path d="m15 9-6 6M9 9l6 6"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5"/><path d="M12 16v-4.5M12 8h.01"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
+  <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="17" rx="2.5"/><path d="M16 2.5v4M8 2.5v4M3 10h18"/></symbol>
+  <symbol id="i-range" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="17" rx="2.5"/><path d="M16 2.5v4M8 2.5v4M3 10h18M7.5 15.5h9"/><path d="m14.5 13.5 2 2-2 2" /></symbol>
+  <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.66 3.58 3 8 3s8-1.34 8-3v-13"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5-12-7.5z"/></symbol>
+  <symbol id="i-power" viewBox="0 0 24 24"><path d="M18.36 6.64a9 9 0 1 1-12.73 0M12 2v10"/></symbol>
+  <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></symbol>
+  <symbol id="i-loader" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5"/><path d="M12 7v5l3.2 2"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M21.5 20a6.5 6.5 0 0 0-4-6"/></symbol>
+  <symbol id="i-hash" viewBox="0 0 24 24"><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4 20-7z"/><path d="M22 2 11 13"/></symbol>
+</svg>
 
-<main>
-  <!-- STATUS -->
-  <section class="grid" id="cards">
-    <div class="card"><h3>Cursor (último id)</h3><div class="big" id="cCursor">—</div><div class="sub">máximo visto: <span id="cMax">—</span></div></div>
-    <div class="card"><h3>Batidas enviadas</h3><div class="big" id="cFwd">—</div><div class="sub">desde o início do processo</div></div>
-    <div class="card"><h3>Recusadas s/ horário</h3><div class="big" id="cSkip">—</div><div class="sub">nunca enviadas (anti-colapso)</div></div>
-    <div class="card"><h3>Erros</h3><div class="big" id="cErr">—</div><div class="sub" id="cErrMsg">—</div></div>
-    <div class="card"><h3>Última batida</h3><div class="big" id="cSync">—</div><div class="sub" id="cTick">—</div></div>
-    <div class="card"><h3>Usuários/faces</h3><div class="big" id="cUsers">—</div><div class="sub" id="cUserSync">—</div></div>
-  </section>
+<div class="app">
+  <aside>
+    <div class="brand">
+      <div class="brand-mark"><img src="/logo.png" alt=""></div>
+      <div><b>PontoPar</b><span>Coletor Control iD</span></div>
+    </div>
+    <nav class="nav">
+      <a href="#overview" data-view="overview"><svg class="ic"><use href="#i-activity"/></svg>Visão geral</a>
+      <a href="#refill" data-view="refill"><svg class="ic"><use href="#i-refill"/></svg>Refill<span class="tag" id="navRefillTag" hidden>rodando</span></a>
+      <a href="#config" data-view="config"><svg class="ic"><use href="#i-sliders"/></svg>Configurações<span class="tag" id="navCfgTag" hidden>!</span></a>
+      <a href="#logs" data-view="logs"><svg class="ic"><use href="#i-list"/></svg>Registros</a>
+    </nav>
+    <div class="side-foot">
+      <div class="side-row"><span class="dot" id="sideDot" style="color:#a99cc8"></span>Serviço: <b id="sideSvc">—</b></div>
+      <div class="side-row">Versão <b id="sideVer">{{VERSION}}</b></div>
+      <div><button class="theme-btn" id="themeBtn" type="button"><svg class="ic"><use href="#i-moon"/></svg><span>Tema escuro</span></button></div>
+    </div>
+  </aside>
 
-  <!-- FULL SYNC -->
-  <section class="panel">
-    <h2>Consultar o Control iD completo (full-sync)</h2>
-    <p class="hint">Puxa o histórico de batidas do aparelho de uma vez, em ordem, carregando o horário real de cada evento. Envia em LOTES (poucas requisições, sem "too many requests") e é à prova de falha: respeita o limite do servidor e nunca desiste no meio. É seguro repetir (o Thera deduplica por aparelho+id+hora) e retomável se for interrompido.</p>
-    <div class="row" style="margin-top:12px">
-      <div class="field" style="max-width:150px"><label>Começar a partir do id</label><input id="fsStart" type="number" value="0" min="0"></div>
-      <div class="field" style="max-width:170px"><label>Período — início (opcional)</label><input id="fsFrom" type="date"></div>
-      <div class="field" style="max-width:170px"><label>Período — fim (opcional)</label><input id="fsTo" type="date"></div>
-    </div>
-    <p class="hint">Deixe as datas em branco para puxar TUDO. Preencha para recuperar só um período (ex.: outubro inteiro → 01/10 a 31/10).</p>
-    <div class="row" style="margin-top:10px">
-      <button id="btnFull">Consultar completo</button>
-      <button class="ghost" id="btnFullResume">Retomar interrompido</button>
-      <span class="hint" id="fsState"></span>
-    </div>
-    <div class="warnbox" id="fsBox" style="display:none"></div>
-  </section>
+  <main>
+    <!-- banner do modo setup -->
+    <section class="setup" id="setupBanner" hidden>
+      <div class="hero-icon" style="background:rgba(255,255,255,.14);color:#fff;box-shadow:none"><svg class="ic"><use href="#i-shield"/></svg></div>
+      <div>
+        <h2>O coletor ainda não está instalado neste computador</h2>
+        <ol><li>Preencha e salve a configuração do relógio e do Thera.</li><li>Clique em <b>Instalar e iniciar</b>. O Windows vai pedir permissão de administrador.</li></ol>
+      </div>
+      <button class="btn lg" id="btnInstallBanner" type="button"><svg class="ic"><use href="#i-shield"/></svg>Instalar e iniciar</button>
+    </section>
 
-  <!-- CONFIG -->
-  <section class="panel">
-    <h2>Configuração</h2>
-    <div class="formgrid">
-      <div class="field"><label>IP do Control iD</label><input id="deviceIp"></div>
-      <div class="field"><label>Porta web</label><input id="devicePort" type="number"></div>
-      <div class="field"><label>Usuário</label><input id="login"></div>
-      <div class="field"><label>Senha</label><input id="password" type="password"></div>
-      <div class="field"><label>ID do aparelho no Thera</label><input id="deviceId"></div>
-      <div class="field"><label>Endereço do Thera (theraBase)</label><input id="theraBase"></div>
-      <div class="field"><label>Segredo do Thera</label><input id="deviceSecret" type="password"></div>
-      <div class="field"><label>Verificar a cada (s)</label><input id="pollSeconds" type="number"></div>
-      <div class="field"><label>Tamanho do lote (batchSize)</label><input id="batchSize" type="number"></div>
-      <div class="field"><label>Retentativas por batida</label><input id="maxRetries" type="number"></div>
-      <div class="field"><label>Backoff base (s)</label><input id="retryBackoffSeconds" type="number"></div>
-      <div class="field"><label>Porta do painel (ui.port)</label><input id="uiPort" type="number"></div>
-      <div class="field"><label>Distância da face (cm)</label><input id="idDist" type="number"></div>
-      <div class="field"><label>Modo do terminal</label><select id="terminalMode"><option value="attendance">attendance (ponto)</option><option value="access">access (acesso)</option></select></div>
-      <div class="field"><label>Liveness rigoroso</label><select id="liveness"><option value="1">sim</option><option value="0">não</option></select></div>
-      <div class="field"><label>Limitar à região da tela</label><select id="region"><option value="1">sim</option><option value="0">não</option></select></div>
-      <div class="field"><label>Enviar foto da batida</label><select id="photo"><option value="1">sim</option><option value="0">não</option></select></div>
-    </div>
-    <div class="field" style="margin-top:12px">
-      <label>Mapeamento manual user_id → matrícula (JSON). Tem prioridade sobre o aparelho. Ex.: <code>{"900000004":"12","900000006":"34"}</code></label>
-      <textarea id="overrides">{}</textarea>
-    </div>
-    <div class="row" style="margin-top:14px">
-      <button id="btnSave">Salvar configuração</button>
-      <button class="ghost" id="btnTestDevice">Testar Control iD</button>
-      <button class="ghost" id="btnTestThera">Testar Thera</button>
-      <span class="hint">Salvar aplica em poucos segundos (o coletor recarrega sozinho).</span>
-    </div>
-  </section>
+    <!-- ================= VISÃO GERAL ================= -->
+    <section class="view" id="view-overview">
+      <div class="page-head">
+        <div><h1>Visão geral</h1><p id="ovSub">Acompanhe a coleta de batidas em tempo real.</p></div>
+        <div class="actions">
+          <button class="btn ghost" id="btnCollect" type="button"><svg class="ic"><use href="#i-zap"/></svg><svg class="ic spin"><use href="#i-loader"/></svg>Coletar agora</button>
+          <a class="btn" href="#refill" id="btnGoRefill"><svg class="ic"><use href="#i-refill"/></svg>Fazer refill</a>
+        </div>
+      </div>
 
-  <!-- SERVIÇO / AUTOSTART -->
-  <section class="panel">
-    <h2>Serviço do Windows</h2>
-    <div class="row">
-      <label class="switch"><input type="checkbox" id="autostart"><span class="slider"></span></label>
-      <span>Iniciar com o Windows</span>
-      <div class="spacer"></div>
-      <button class="ghost" id="btnStart">Iniciar serviço</button>
-      <button class="danger" id="btnStop">Parar serviço</button>
-    </div>
-    <p class="hint" id="svcHint" style="margin-bottom:0;margin-top:12px"></p>
-  </section>
+      <div class="hero tone-idle" id="hero">
+        <div class="hero-icon"><svg class="ic" id="heroIc"><use href="#i-loader"/></svg></div>
+        <div style="min-width:0">
+          <h2 id="heroTitle">Carregando…</h2>
+          <p id="heroSub">Buscando o estado do coletor.</p>
+          <div class="detail" id="heroDetail" hidden></div>
+        </div>
+        <div class="hero-act" id="heroAct"></div>
+      </div>
 
-  <!-- LOG -->
-  <section class="panel">
-    <h2>Log ao vivo <span class="hint" style="font-weight:400">(atualiza sozinho)</span></h2>
-    <pre class="log" id="log">…</pre>
-  </section>
+      <div class="grid g3" style="margin-bottom:16px">
+        <div class="card conn">
+          <div class="conn-ic"><svg class="ic lg"><use href="#i-face"/></svg></div>
+          <div class="conn-body"><div class="conn-top"><div class="t">Relógio</div><span class="pill" id="cDevPill">—</span></div><div class="s" id="cDevAddr">—</div><div class="s" id="cDevWhen">—</div></div>
+        </div>
+        <div class="card conn">
+          <div class="conn-ic"><svg class="ic lg"><use href="#i-cloud"/></svg></div>
+          <div class="conn-body"><div class="conn-top"><div class="t">Thera</div><span class="pill" id="cTheraPill">—</span></div><div class="s" id="cTheraAddr">—</div><div class="s" id="cTheraWhen">—</div></div>
+        </div>
+        <div class="card conn">
+          <div class="conn-ic"><svg class="ic lg"><use href="#i-monitor"/></svg></div>
+          <div class="conn-body"><div class="conn-top"><div class="t">Iniciar com o Windows</div><label class="sw" title="Iniciar com o Windows"><input type="checkbox" id="swAutostartTop"><i></i></label></div><div class="s" id="cWinSub">—</div><div class="s" id="cWinSvc">—</div></div>
+        </div>
+      </div>
 
-  <!-- AUDITORIA -->
-  <section class="panel">
-    <h2>Auditoria de sincronizações <a class="hint" href="/api/audit.csv" style="margin-left:8px">⬇ exportar CSV</a></h2>
-    <p class="hint">Cada linha é um run: a faixa de ids varrida, quantas batidas foram lidas/enviadas, quantas foram recusadas por falta de horário, e se a drenagem foi verificada como completa. É a prova de completude.</p>
-    <div style="overflow:auto;margin-top:10px">
-      <table>
-        <thead><tr><th>quando</th><th>modo</th><th>de id</th><th>até id</th><th class="num">lidas</th><th class="num">enviadas</th><th class="num">s/ horário</th><th class="num">id inválido</th><th class="num">lacuna</th><th>verif.</th><th>erro</th></tr></thead>
-        <tbody id="auditBody"><tr><td colspan="11" class="muted">carregando…</td></tr></tbody>
-      </table>
-    </div>
-  </section>
-</main>
+      <div class="grid g4" style="margin-bottom:16px">
+        <div class="card kpi"><div class="l"><svg class="ic"><use href="#i-clock"/></svg>Batidas hoje</div><div class="v num" id="kToday">—</div><div class="f" id="kTodayF">recebidas em tempo real</div></div>
+        <div class="card kpi"><div class="l"><svg class="ic"><use href="#i-send"/></svg>Enviadas ao Thera</div><div class="v num" id="kFwd">—</div><div class="f" id="kFwdF">desde que o coletor ligou</div></div>
+        <div class="card kpi"><div class="l"><svg class="ic"><use href="#i-hash"/></svg>Último registro</div><div class="v num" id="kCursor">—</div><div class="f" id="kCursorF">id do relógio já confirmado</div></div>
+        <div class="card kpi"><div class="l"><svg class="ic"><use href="#i-users"/></svg>Pessoas no relógio</div><div class="v num" id="kUsers">—</div><div class="f" id="kUsersF">—</div></div>
+      </div>
 
-<div class="toast" id="toast"></div>
+      <div class="split">
+        <div class="card">
+          <div class="card-head"><h2>Últimas batidas</h2><span class="hint" id="feedHint">ao vivo</span></div>
+          <ul class="feed" id="feed"></ul>
+        </div>
+        <div class="stack">
+          <div class="card" id="ovRefillCard">
+            <div class="card-head"><h2>Refill</h2><a class="hint" href="#refill">abrir →</a></div>
+            <div class="card-pad" id="ovRefillBody"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>Saúde</h2></div>
+            <div class="card-pad" style="display:grid;gap:12px">
+              <div style="display:flex;justify-content:space-between"><span class="muted">Erros desde que ligou</span><b class="num" id="hErr">—</b></div>
+              <div style="display:flex;justify-content:space-between"><span class="muted">Recusadas sem horário</span><b class="num" id="hSkip">—</b></div>
+              <div style="display:flex;justify-content:space-between"><span class="muted">Enviadas sem matrícula</span><b class="num" id="hNoReg">—</b></div>
+              <div style="display:flex;justify-content:space-between"><span class="muted">Ligado desde</span><b id="hUp">—</b></div>
+              <div class="insight warn" id="hSyncErr" hidden style="margin-top:0"><svg class="ic"><use href="#i-users"/></svg><div><b>Sincronização de cadastros falhou</b> <span class="faint" id="hSyncErrAt"></span><div class="hint">As batidas continuam indo normalmente.</div><div class="mono" style="font-size:12px;word-break:break-word" id="hSyncErrMsg"></div></div></div>
+              <div class="insight bad" id="hLastErr" hidden style="margin-top:0"><svg class="ic"><use href="#i-alert"/></svg><div><b>Último erro</b> <span class="faint" id="hLastErrAt"></span><div class="mono" style="font-size:12px;word-break:break-word" id="hLastErrMsg"></div></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= REFILL ================= -->
+    <section class="view" id="view-refill" hidden>
+      <div class="page-head">
+        <div><h1>Refill</h1><p>Reenvie ao Thera as batidas que o relógio ainda guarda.</p></div>
+      </div>
+
+      <div class="card" id="rfRunning" hidden style="margin-bottom:16px">
+        <div class="card-head"><span class="dot pulse" style="color:var(--brand)"></span><h2>Refill em andamento</h2><span class="hint" id="rfRunSrc"></span><button class="btn danger sm" id="btnCancelRefill" type="button" style="margin-left:12px"><svg class="ic"><use href="#i-x-circle"/></svg>Parar refill</button></div>
+        <div class="card-pad" style="display:grid;gap:14px">
+          <div style="display:flex;align-items:baseline;gap:10px"><b style="font-size:26px;letter-spacing:-.6px" class="num" id="rfPct">—</b><span class="muted" id="rfRunSub"></span><span class="faint" style="margin-left:auto" id="rfElapsed"></span></div>
+          <div class="progress" id="rfBar"><i></i></div>
+          <div class="stats">
+            <div class="stat"><div class="l">Lidas do relógio</div><div class="v num" id="rfRead">0</div></div>
+            <div class="stat ok"><div class="l">Enviadas ao Thera</div><div class="v num" id="rfSent">0</div></div>
+            <div class="stat"><div class="l">Registro atual</div><div class="v num" id="rfCur">—</div></div>
+            <div class="stat"><div class="l">Período</div><div class="v" style="font-size:15px;margin-top:6px" id="rfPeriod">—</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" id="rfForm" style="margin-bottom:16px">
+        <div class="card-pad" style="display:grid;gap:18px">
+          <div class="explain"><svg class="ic"><use href="#i-info"/></svg><div>O refill relê a memória do relógio e reenvia ao Thera. <b>Nada é duplicado</b>: o Thera ignora o que já tinha e grava só o que estava faltando. Pode repetir à vontade.</div></div>
+          <div class="tiles" id="rfTiles">
+            <button class="tile on" data-mode="all" type="button"><span class="check"><svg class="ic"><use href="#i-check"/></svg></span><div class="ti"><svg class="ic"><use href="#i-database"/></svg></div><b>Tudo desde o início</b><span>Reenvia todo o histórico que o relógio ainda tem na memória.</span></button>
+            <button class="tile" data-mode="since" type="button"><span class="check"><svg class="ic"><use href="#i-check"/></svg></span><div class="ti"><svg class="ic"><use href="#i-calendar"/></svg></div><b>Desde uma data</b><span>Só as batidas a partir do dia escolhido até agora.</span></button>
+            <button class="tile" data-mode="period" type="button"><span class="check"><svg class="ic"><use href="#i-check"/></svg></span><div class="ti"><svg class="ic"><use href="#i-range"/></svg></div><b>Período</b><span>Só as batidas entre duas datas (ex.: um mês inteiro).</span></button>
+          </div>
+          <div id="rfSinceBox" hidden style="display:grid;gap:12px">
+            <div class="chips" id="rfChips">
+              <button class="chip" data-days="1" type="button">Hoje</button>
+              <button class="chip" data-days="2" type="button">Desde ontem</button>
+              <button class="chip" data-days="7" type="button">Últimos 7 dias</button>
+              <button class="chip" data-days="15" type="button">Últimos 15 dias</button>
+              <button class="chip" data-days="30" type="button">Últimos 30 dias</button>
+            </div>
+            <div class="dates"><div class="field"><label for="rfSince">A partir de</label><input class="input" type="date" id="rfSince"></div></div>
+          </div>
+          <div id="rfPeriodBox" hidden class="dates">
+            <div class="field"><label for="rfFrom">De</label><input class="input" type="date" id="rfFrom"></div>
+            <div class="field"><label for="rfTo">Até</label><input class="input" type="date" id="rfTo"></div>
+          </div>
+          <div class="refill-cta">
+            <button class="btn lg" id="btnRefill" type="button"><svg class="ic"><use href="#i-play"/></svg>Iniciar refill</button>
+            <span class="muted" id="rfSummary">Vai reenviar tudo o que o relógio guarda.</span>
+            <button class="btn ghost sm" id="btnResume" type="button" style="margin-left:auto" hidden><svg class="ic"><use href="#i-rotate"/></svg>Retomar um refill interrompido</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-head"><h2>Resultado do último refill</h2><span class="hint" id="rfLastWhen"></span></div>
+        <div class="card-pad" id="rfLast"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>Histórico de refills</h2><a class="hint" href="/api/audit.csv">exportar CSV</a></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Quando</th><th>Origem</th><th>Período</th><th class="n">Lidas</th><th class="n">Enviadas</th><th class="n">Sem matrícula</th><th class="n">Lacuna</th><th>Resultado</th></tr></thead>
+          <tbody id="rfHist"><tr><td colspan="8" class="muted">carregando…</td></tr></tbody>
+        </table></div>
+      </div>
+    </section>
+
+    <!-- ================= CONFIG ================= -->
+    <section class="view" id="view-config" hidden>
+      <div class="page-head">
+        <div><h1>Configurações</h1><p id="cfgSub">As alterações valem em poucos segundos — o coletor recarrega sozinho.</p></div>
+      </div>
+      <form class="card" id="cfgForm" autocomplete="off" onsubmit="return false">
+        <div class="form-sec">
+          <div><h3>Relógio Control iD</h3><div class="desc">Endereço do relógio na rede deste computador e o usuário de acesso à página dele.</div></div>
+          <div>
+            <div class="fields">
+              <div class="field"><label for="f-deviceIp">IP do relógio</label><input class="input mono" id="f-deviceIp" placeholder="192.168.1.111"></div>
+              <div class="field"><label for="f-devicePort">Porta</label><input class="input num" id="f-devicePort" type="number" min="1" max="65535"></div>
+              <div class="field"><label for="f-login">Usuário</label><input class="input" id="f-login"></div>
+              <div class="field"><label for="f-password">Senha</label><div class="pw"><input class="input" id="f-password" type="password"><button type="button" data-eye="f-password" title="Mostrar"><svg class="ic"><use href="#i-eye"/></svg></button></div></div>
+            </div>
+            <div class="test-line"><button class="btn ghost sm" id="btnTestDevice" type="button"><svg class="ic"><use href="#i-face"/></svg><svg class="ic spin"><use href="#i-loader"/></svg>Testar relógio</button><span class="hint" id="tDev"></span></div>
+          </div>
+        </div>
+        <div class="form-sec">
+          <div><h3>Thera</h3><div class="desc">Para onde as batidas vão. O segredo identifica este relógio no Thera.</div></div>
+          <div>
+            <div class="fields">
+              <div class="field full"><label for="f-theraBase">Endereço do Thera</label><input class="input mono" id="f-theraBase" placeholder="https://…"></div>
+              <div class="field"><label for="f-deviceSecret">Segredo do relógio</label><div class="pw"><input class="input mono" id="f-deviceSecret" type="password"><button type="button" data-eye="f-deviceSecret" title="Mostrar"><svg class="ic"><use href="#i-eye"/></svg></button></div></div>
+              <div class="field"><label for="f-deviceId">ID do aparelho no Thera</label><input class="input mono" id="f-deviceId" inputmode="numeric"></div>
+            </div>
+            <div class="test-line"><button class="btn ghost sm" id="btnTestThera" type="button"><svg class="ic"><use href="#i-cloud"/></svg><svg class="ic spin"><use href="#i-loader"/></svg>Testar Thera</button><span class="hint" id="tThera"></span></div>
+          </div>
+        </div>
+        <div class="form-sec">
+          <div><h3>Reconhecimento facial</h3><div class="desc">Aplicado no relógio a cada sincronização.</div></div>
+          <div>
+            <div class="fields" style="margin-bottom:6px">
+              <div class="field"><label for="f-idDist">Distância de identificação (cm)</label><input class="input num" id="f-idDist" type="number" min="30" max="200"><div class="help">Entre 30 e 200. 50 cm é um bom começo.</div></div>
+              <div class="field"><label>Modo do terminal</label><div class="seg" id="segMode"><button type="button" data-v="attendance">Ponto</button><button type="button" data-v="access">Acesso</button></div><div class="help">“Ponto” registra qualquer pessoa cadastrada.</div></div>
+            </div>
+            <div class="toggle-row"><div class="tx"><b>Prova de vida rigorosa</b><span>Recusa foto de foto/tela (liveness).</span></div><label class="sw"><input type="checkbox" id="f-liveness"><i></i></label></div>
+            <div class="toggle-row"><div class="tx"><b>Limitar à região da tela</b><span>Só reconhece o rosto dentro da moldura.</span></div><label class="sw"><input type="checkbox" id="f-region"><i></i></label></div>
+            <div class="toggle-row"><div class="tx"><b>Enviar foto da batida</b><span>Anexa a foto de cada marcação no Thera.</span></div><label class="sw"><input type="checkbox" id="f-photo"><i></i></label></div>
+          </div>
+        </div>
+        <div class="form-sec">
+          <div><h3>Coleta</h3><div class="desc">Ritmo e tolerância a falhas. Os padrões servem para quase todo mundo.</div></div>
+          <div class="fields c3">
+            <div class="field"><label for="f-pollSeconds">Verificar a cada (s)</label><input class="input num" id="f-pollSeconds" type="number" min="1"></div>
+            <div class="field"><label for="f-batchSize">Lote de leitura</label><input class="input num" id="f-batchSize" type="number" min="1" max="1000"></div>
+            <div class="field"><label for="f-forwardBatch">Batidas por envio (refill)</label><input class="input num" id="f-forwardBatch" type="number" min="1" max="1000"></div>
+            <div class="field"><label for="f-maxRetries">Retentativas</label><input class="input num" id="f-maxRetries" type="number" min="0"></div>
+            <div class="field"><label for="f-retryBackoffSeconds">Espera entre tentativas (s)</label><input class="input num" id="f-retryBackoffSeconds" type="number" min="1"></div>
+          </div>
+        </div>
+        <div class="form-sec">
+          <div><h3>Matrícula manual</h3><div class="desc">Quando o cadastro no relógio está sem matrícula. Tem prioridade sobre o relógio.</div></div>
+          <div class="field"><label for="f-overrides">user_id do relógio → matrícula (JSON)</label><textarea class="input" id="f-overrides" spellcheck="false" placeholder='{"900000004":"0003"}'></textarea></div>
+        </div>
+        <div class="form-sec">
+          <div><h3>Windows</h3><div class="desc">O coletor roda como serviço: coleta mesmo sem ninguém logado.</div></div>
+          <div>
+            <div class="toggle-row"><div class="tx"><b>Iniciar com o Windows</b><span id="swAutoSub">Sobe o coletor no boot e abre o ícone na bandeja ao entrar.</span></div><label class="sw"><input type="checkbox" id="swAutostart"><i></i></label></div>
+            <div class="toggle-row"><div class="tx"><b>Serviço do coletor</b><span id="svcLine">—</span></div>
+              <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap" id="svcButtons">
+                <button class="btn ghost sm" id="btnRestart" type="button"><svg class="ic"><use href="#i-rotate"/></svg>Reiniciar coleta</button>
+                <button class="btn danger sm" id="btnStop" type="button"><svg class="ic"><use href="#i-power"/></svg>Parar</button>
+              </div>
+            </div>
+            <div class="hint" style="margin-top:10px">Dados em <span class="mono" id="dataDir">—</span></div>
+          </div>
+        </div>
+      </form>
+    </section>
+
+    <!-- ================= REGISTROS ================= -->
+    <section class="view" id="view-logs" hidden>
+      <div class="page-head">
+        <div><h1>Registros</h1><p>O que o coletor fez, linha a linha, e a auditoria de cada sincronização.</p></div>
+        <div class="actions"><div class="tabs" id="logTabs"><button class="on" data-t="log" type="button">Log ao vivo</button><button data-t="audit" type="button">Auditoria</button></div></div>
+      </div>
+      <div class="card" id="logCard">
+        <div class="card-head">
+          <div class="tabs" id="logFilter"><button class="on" data-f="all" type="button">Tudo</button><button data-f="err" type="button">Só erros</button><button data-f="punch" type="button">Batidas</button></div>
+          <label class="hint" style="margin-left:auto;display:flex;align-items:center;gap:8px;cursor:pointer"><span class="sw" style="transform:scale(.85)"><input type="checkbox" id="logFollow" checked><i></i></span>Seguir o fim</label>
+        </div>
+        <pre class="log" id="log">carregando…</pre>
+      </div>
+      <div class="card" id="auditCard" hidden>
+        <div class="card-head"><h2>Auditoria de sincronizações</h2><a class="btn ghost sm" href="/api/audit.csv" style="margin-left:auto"><svg class="ic"><use href="#i-download"/></svg>Exportar CSV</a></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Quando</th><th>Tipo</th><th class="n">De id</th><th class="n">Até id</th><th class="n">Lidas</th><th class="n">Enviadas</th><th class="n">Sem horário</th><th class="n">Sem matrícula</th><th class="n">Lacuna</th><th>Verif.</th><th>Erro</th></tr></thead>
+          <tbody id="auditBody"><tr><td colspan="11" class="muted">carregando…</td></tr></tbody>
+        </table></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="savebar" id="savebar">
+  <span id="savebarMsg">Alterações não salvas</span>
+  <button class="btn ghost sm" id="btnDiscard" type="button">Descartar</button>
+  <button class="btn sm" id="btnSave" type="button" style="background:#fff;color:#2b1554"><svg class="ic"><use href="#i-check"/></svg>Salvar</button>
+</div>
+<div class="toasts" id="toasts"></div>
 
 <script>
-const TOKEN = document.querySelector('meta[name=pontopar-token]').content;
-const $ = id => document.getElementById(id);
+'use strict';
+let TOKEN = document.querySelector('meta[name=pontopar-token]').content;
+const PAGE_MODE = document.querySelector('meta[name=pontopar-mode]').content;
+const $ = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt = n => Number(n || 0).toLocaleString('pt-BR');
+const icon = (id, cls='ic') => `<svg class="${cls}"><use href="#i-${id}"/></svg>`;
+const zero = ts => !ts || String(ts).startsWith('0001');
+const SVC = {'nao instalado':'não instalado', 'rodando':'rodando', 'parado':'parado', 'iniciando':'iniciando', 'parando':'parando', 'desconhecido':'desconhecido'};
+const svcLabel = v => SVC[v] || v || '—';
+let S = null, view = 'overview', lastOk = Date.now(), lost = false;
 
-function toast(msg, ok=true){ const t=$('toast'); t.textContent=msg; t.className='toast show '+(ok?'ok':'bad');
-  setTimeout(()=>{t.className='toast '+(ok?'ok':'bad');}, 3200); }
-
-async function api(path, opts={}){ opts.headers = Object.assign({'X-PontoPar-Token':TOKEN,'Content-Type':'application/json'}, opts.headers||{});
-  const r = await fetch(path, opts); if(!r.ok){ throw new Error((await r.text())||('HTTP '+r.status)); }
-  const ct=r.headers.get('content-type')||''; return ct.includes('json')? r.json(): r.text(); }
-
-function ago(ts){ if(!ts||ts.startsWith('0001'))return '—'; const d=new Date(ts); const s=Math.floor((Date.now()-d)/1000);
-  if(s<0)return 'agora'; if(s<60)return s+'s atrás'; if(s<3600)return Math.floor(s/60)+'min atrás'; if(s<86400)return Math.floor(s/3600)+'h atrás'; return Math.floor(s/86400)+'d atrás'; }
-function hhmm(ts){ if(!ts||ts.startsWith('0001'))return '—'; return new Date(ts).toLocaleString('pt-BR'); }
-
-let fullRunning=false;
-async function refreshStatus(){
-  try{
-    const d = await api('/api/status'); const s=d.state;
-    $('dotDevice').className='dot '+(s.deviceOnline?'on':'off');
-    $('dotThera').className='dot '+(s.theraOnline?'on':'off');
-    $('svcBadge').textContent='serviço: '+(d.service||'—');
-    $('cCursor').textContent=s.cursor??'—'; $('cMax').textContent=s.maxDeviceId??'—';
-    $('cFwd').textContent=s.forwardedTotal??0; $('cSkip').textContent=s.skippedNoTime??0;
-    $('cErr').textContent=s.errorCount??0; $('cErrMsg').textContent=s.lastError? (s.lastError.slice(0,80)) : 'sem erros';
-    $('cSync').textContent=ago(s.lastSyncAt); $('cTick').textContent='último ciclo: '+ago(s.lastTickAt);
-    $('cUsers').textContent=s.usersObserved??'—'; $('cUserSync').textContent='sincronizado '+ago(s.lastUserSyncAt);
-    // full-sync
-    fullRunning=s.fullSyncRunning;
-    $('btnFull').disabled=fullRunning; $('btnFullResume').disabled=fullRunning;
-    if(fullRunning){ $('fsState').textContent='rodando… id '+s.fullSyncCurrentId+' · '+s.fullSyncForwarded+' enviadas / '+s.fullSyncReadTotal+' lidas'; }
-    else if(s.fullSyncLastResult){ $('fsState').textContent='último: '+s.fullSyncLastResult+' ('+ago(s.fullSyncLastAt)+')'; }
-    // autostart
-    const cb=$('autostart'); cb.disabled=!d.autostartKnown; cb.checked=!!d.autostart;
-    $('svcHint').textContent=d.autostartKnown? '' : 'Serviço não instalado nesta máquina (ou rodando fora do Windows). Instale pelo PontoPar-Setup para habilitar início automático.';
-  }catch(e){ /* painel segue; coleta nunca depende dele */ }
+/* ---------- utilidades de tempo ---------- */
+function ago(ts){
+  if (zero(ts)) return 'nunca';
+  const s = Math.round((Date.now() - new Date(ts)) / 1000);
+  if (s < 5) return 'agora'; if (s < 60) return `há ${s}s`;
+  if (s < 3600) return `há ${Math.floor(s/60)} min`; if (s < 86400) return `há ${Math.floor(s/3600)} h`;
+  const d = Math.floor(s/86400); return d === 1 ? 'ontem' : `há ${d} dias`;
+}
+const epoch = n => { n = Number(n||0); return new Date((n > 1e12 ? n : n*1000)); };
+const hm = d => d.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
+const dm = d => d.toLocaleDateString('pt-BR', {day:'2-digit', month:'2-digit'});
+const dmy = d => d.toLocaleDateString('pt-BR');
+const dt = ts => zero(ts) ? '—' : new Date(ts).toLocaleString('pt-BR', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'});
+function dur(ms){ ms = Number(ms||0); const s = Math.round(ms/1000); if (s < 60) return `${s}s`; const m = Math.floor(s/60); return m < 60 ? `${m} min ${s%60}s` : `${Math.floor(m/60)} h ${m%60} min`; }
+const isoDay = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+function periodText(from, to){
+  if (!from && !to) return 'Tudo';
+  const f = from ? dmy(epoch(from)) : 'início', t = to ? dmy(epoch(to)) : 'agora';
+  return `${f} → ${t}`;
 }
 
-async function refreshLog(){ try{ $('log').textContent = await api('/api/log?bytes=24000'); $('log').scrollTop=$('log').scrollHeight; }catch(e){} }
+/* ---------- API ---------- */
+// O serviço gera um token novo a cada reinício. Em vez de recarregar a página
+// (e perder o que estava digitado), busca o token novo e repete o pedido 1 vez.
+async function refreshToken(){
+  const html = await (await fetch('/', {cache:'no-store'})).text();
+  const m = /name="pontopar-token" content="([^"]+)"/.exec(html);
+  if (m) TOKEN = m[1];
+  return !!m;
+}
+async function api(path, opts = {}, retried = false){
+  const o = Object.assign({}, opts, {headers: Object.assign({'X-PontoPar-Token': TOKEN, 'Content-Type': 'application/json'}, opts.headers || {})});
+  // Timeout: um coletor TRAVADO aceita a conexão e nunca responde — sem isto a
+  // página ficava "Coletando normalmente" para sempre.
+  const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), opts.timeout || 8000);
+  o.signal = ctl.signal;
+  let r;
+  try { r = await fetch(path, o); }
+  catch (e){ throw new Error('O coletor não respondeu (o serviço pode estar parado, travado ou reiniciando).'); }
+  finally { clearTimeout(timer); }
+  if (!r.ok){
+    const msg = (await r.text()).trim() || ('HTTP ' + r.status);
+    if (r.status === 403 && /token/i.test(msg) && !retried && await refreshToken().catch(() => false)) return api(path, opts, true);
+    throw new Error(msg);
+  }
+  const ct = r.headers.get('content-type') || '';
+  return ct.includes('json') ? r.json() : r.text();
+}
+const post = (path, body) => api(path, {method:'POST', body: body ? JSON.stringify(body) : undefined});
 
-async function refreshAudit(){
-  try{
-    const recs = await api('/api/audit?n=60'); const tb=$('auditBody'); tb.innerHTML='';
-    if(!recs||!recs.length){ tb.innerHTML='<tr><td colspan="11" class="muted">nenhum sync registrado ainda</td></tr>'; return; }
-    for(const r of recs){
-      const cls = r.error? 'err' : (r.mode==='full'?'full':'incremental');
-      const tr=document.createElement('tr');
-      tr.innerHTML=`<td>${hhmm(r.time)}</td><td><span class="pill ${cls}">${r.mode}</span></td>
-        <td class="num">${r.fromId}</td><td class="num">${r.toId}</td>
-        <td class="num">${r.read||0}</td><td class="num">${r.forwarded||0}</td>
-        <td class="num">${r.skippedNoTime||0}</td><td class="num">${r.skippedBadId||0}</td>
-        <td class="num">${r.rotatedGap||0}</td><td>${r.verified?'✓':'—'}</td>
-        <td class="muted">${r.error? r.error.slice(0,40):''}</td>`;
-      tb.appendChild(tr);
+/* ---------- toast & modal ---------- */
+function toast(msg, kind = 'ok', title){
+  const ic = kind === 'ok' ? 'check-circle' : kind === 'bad' ? 'x-circle' : 'info';
+  const el = document.createElement('div');
+  el.className = 'toast ' + kind;
+  el.innerHTML = icon(ic) + `<div>${title ? `<b>${esc(title)}</b><br>` : ''}${esc(msg)}</div>`;
+  $('#toasts').appendChild(el);
+  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 220); }, kind === 'bad' ? 6500 : 3800);
+}
+function confirmModal({title, body, ok = 'Confirmar', danger = false}){
+  return new Promise(res => {
+    const bg = document.createElement('div');
+    bg.className = 'modal-bg';
+    bg.innerHTML = `<div class="modal" role="dialog" aria-modal="true"><h3>${esc(title)}</h3><div class="body">${body}</div>
+      <div class="foot"><button class="btn ghost" data-r="0" type="button">Cancelar</button><button class="btn ${danger ? 'danger' : ''}" data-r="1" type="button">${esc(ok)}</button></div></div>`;
+    const opener = document.activeElement;
+    const close = v => { bg.remove(); document.removeEventListener('keydown', onKey, true); if (opener && opener.focus) opener.focus(); res(v); };
+    // Enter NÃO é tratado aqui: o botão focado responde sozinho (Enter em
+    // "Cancelar" cancela). Tab fica preso entre os dois botões.
+    const onKey = e => {
+      if (e.key === 'Escape'){ e.preventDefault(); close(false); }
+      if (e.key === 'Tab'){
+        const bs = Array.from(bg.querySelectorAll('button')); const i = bs.indexOf(document.activeElement);
+        e.preventDefault(); bs[(i + (e.shiftKey ? bs.length - 1 : 1)) % bs.length].focus();
+      }
+    };
+    bg.addEventListener('click', e => { if (e.target === bg) close(false); const b = e.target.closest('[data-r]'); if (b) close(b.dataset.r === '1'); });
+    document.addEventListener('keydown', onKey, true);
+    document.body.appendChild(bg);
+    bg.querySelector(danger ? '[data-r="0"]' : '[data-r="1"]').focus();
+  });
+}
+async function withBusy(btn, fn){
+  btn.classList.add('loading'); btn.disabled = true;
+  try { return await fn(); } finally { btn.classList.remove('loading'); btn.disabled = false; }
+}
+
+/* ---------- navegação ---------- */
+const VIEWS = ['overview','refill','config','logs'];
+function route(){
+  let v = (location.hash || '#overview').slice(1);
+  if (!VIEWS.includes(v)) v = 'overview';
+  view = v;
+  $$('.view').forEach(el => el.hidden = el.id !== 'view-' + v);
+  $$('.nav a').forEach(a => a.classList.toggle('active', a.dataset.view === v));
+  if (v === 'config' && !cfgLoaded) loadConfig();
+  if (v === 'logs') { refreshLog(); if (logTab === 'audit') refreshAudit(); }
+  if (v === 'refill') refreshRefillHistory();
+  window.scrollTo(0, 0);
+}
+window.addEventListener('hashchange', route);
+
+/* ---------- tema ---------- */
+function applyThemeBtn(){
+  const dark = document.documentElement.dataset.theme === 'dark' || (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
+  $('#themeBtn').innerHTML = icon(dark ? 'sun' : 'moon') + `<span>${dark ? 'Tema claro' : 'Tema escuro'}</span>`;
+}
+$('#themeBtn').onclick = () => {
+  const dark = document.documentElement.dataset.theme === 'dark' || (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
+  const t = dark ? 'light' : 'dark';
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem('pp-theme', t); } catch (e) {}
+  applyThemeBtn();
+};
+applyThemeBtn();
+
+/* ---------- status ---------- */
+function heroFor(d){
+  const s = d.state;
+  const lastPunch = zero(s.lastSyncAt) ? 'nenhuma batida desde que ligou' : `última batida ${ago(s.lastSyncAt)}`;
+  if (lost) return {tone:'bad', ic:'x-circle', title:'Sem resposta do coletor', sub:'O serviço pode ter parado ou estar reiniciando. Tentando reconectar… Se não voltar, use o ícone do PontoPar na bandeja → “Iniciar coletor”.'};
+  if (d.mode === 'setup') return {tone:'idle', ic:'shield', title:'Coletor não instalado', sub:'Preencha a configuração e clique em “Instalar e iniciar”. Depois disso ele coleta sozinho, mesmo com o Windows reiniciando.', act:[{label:'Abrir configurações', href:'#config'}]};
+  if (!d.configValid) return {tone:'warn', ic:'alert', title:'Configuração incompleta', sub:'Faltam dados do relógio ou do Thera. A coleta fica pausada até você salvar uma configuração válida.', act:[{label:'Abrir configurações', href:'#config'}]};
+  if (s.fullSyncRunning) return {tone:'brand', ic:'refill', title:'Refill em andamento', sub:`${fmt(s.fullSyncForwarded)} enviadas de ${fmt(s.fullSyncReadTotal)} lidas. A coleta normal volta sozinha quando terminar.`, act:[{label:'Acompanhar', href:'#refill'}]};
+  if (zero(s.lastTickAt)) return {tone:'brand', ic:'loader', title:'Conectando ao relógio…', sub:'Primeiro ciclo de coleta em andamento.'};
+  if (!s.deviceOnline) return {tone:'bad', ic:'alert', title:'Sem conexão com o relógio', sub:`Não consegui falar com o Control iD em ${d.deviceIp}:${d.devicePort}. Confira se ele está ligado e na mesma rede deste computador. As batidas continuam guardadas nele e entram assim que a conexão voltar.`, detail: s.deviceLastError, act:[{label:'Testar agora', fn:'testDevice'}]};
+  if (!s.theraOnline && s.theraLastError) return {tone:'warn', ic:'cloud', title:'Sem conexão com o Thera', sub:'O relógio está respondendo, mas o Thera não. As batidas ficam guardadas no relógio e são enviadas assim que a internet voltar.', detail: s.theraLastError, act:[{label:'Testar Thera', fn:'testThera'}]};
+  let next = '';
+  if (!zero(s.lastTickAt) && s.pollSeconds) { const left = Math.max(0, Math.round(s.pollSeconds - (Date.now() - new Date(s.lastTickAt))/1000)); next = left > 0 ? ` · próxima verificação em ${left}s` : ' · verificando…'; }
+  return {tone:'ok', ic:'check-circle', title:'Coletando normalmente', sub:`Relógio e Thera conectados — ${lastPunch}${next}.`};
+}
+const ICON_PULSE = '<span class="dot pulse" style="color:var(--tone)"></span>';
+function renderHero(d){
+  const h = heroFor(d);
+  const el = $('#hero');
+  el.className = 'hero tone-' + h.tone;
+  $('#heroIc').innerHTML = `<use href="#i-${h.ic}"/>`;
+  $('#heroIc').classList.toggle('spin', h.ic === 'loader');
+  $('#heroTitle').innerHTML = esc(h.title) + (h.tone === 'ok' || h.tone === 'brand' ? ' ' + ICON_PULSE : '');
+  $('#heroSub').textContent = h.sub;
+  $('#heroDetail').hidden = !h.detail; $('#heroDetail').textContent = h.detail || '';
+  const act = $('#heroAct');
+  const key = JSON.stringify(h.act || []);
+  if (act.dataset.key !== key){
+    act.dataset.key = key;
+    act.innerHTML = (h.act || []).map((a, i) => a.href ? `<a class="btn ghost" href="${a.href}">${esc(a.label)}</a>` : `<button class="btn ghost" data-fn="${a.fn}" type="button">${icon('rotate')}${icon('loader','ic spin')}${esc(a.label)}</button>`).join('');
+    act.querySelectorAll('[data-fn]').forEach(b => b.onclick = () => (b.dataset.fn === 'testDevice' ? testDevice(b) : testThera(b)));
+  }
+}
+function pill(el, tone, text){ el.className = 'pill ' + tone; el.innerHTML = `<span class="dot"></span>${esc(text)}`; }
+
+function renderStatus(d){
+  S = d; const s = d.state;
+  document.body.dataset.mode = d.mode;
+  $('#cfgSub').textContent = d.mode === 'setup' ? 'Preencha os dados do relógio e do Thera e salve. Depois clique em “Instalar e iniciar”.' : 'As alterações valem em poucos segundos — o coletor recarrega sozinho.';
+  $('#setupBanner').hidden = d.mode !== 'setup';
+  $('#sideSvc').textContent = svcLabel(d.service);
+  const setup = d.mode === 'setup';
+  $('#btnGoRefill').hidden = setup; $('#btnCollect').hidden = setup; $('#svcButtons').hidden = setup;
+  $('#sideDot').style.color = d.service === 'rodando' ? '#34d399' : d.mode === 'setup' ? '#a99cc8' : '#fb7185';
+  $('#sideVer').textContent = d.version || s.version || '—';
+  renderHero(d);
+
+  // conexões
+  $('#cDevAddr').textContent = `Control iD · ${d.deviceIp || '—'}:${d.devicePort || ''}`;
+  $('#cDevWhen').textContent = zero(s.deviceLastOk) ? 'ainda sem resposta' : s.deviceOnline ? `respondeu ${ago(s.deviceLastOk)}` : `última resposta ${ago(s.deviceLastOk)}`;
+  if (d.mode === 'setup') pill($('#cDevPill'), '', 'inativo');
+  else if (s.deviceOnline) pill($('#cDevPill'), 'ok', 'online');
+  else pill($('#cDevPill'), zero(s.lastTickAt) ? '' : 'bad', zero(s.lastTickAt) ? 'conectando' : 'sem conexão');
+  let host = d.theraBase || '—'; try { host = new URL(d.theraBase).host; } catch (e) {}
+  $('#cTheraAddr').textContent = host;
+  $('#cTheraWhen').textContent = zero(s.theraLastOk) ? 'ainda sem resposta' : s.theraOnline ? `respondeu ${ago(s.theraLastOk)}` : `última resposta ${ago(s.theraLastOk)}`;
+  if (d.mode === 'setup') pill($('#cTheraPill'), '', 'inativo');
+  else if (s.theraOnline) pill($('#cTheraPill'), 'ok', 'online');
+  else pill($('#cTheraPill'), s.theraLastError ? 'warn' : '', s.theraLastError ? 'sem conexão' : 'conectando');
+
+  // windows
+  const auto = !!d.autostart;
+  ['#swAutostartTop', '#swAutostart'].forEach(id => { const cb = $(id); if (!cb.dataset.busy) cb.checked = auto; cb.disabled = !d.autostartKnown || !!cb.dataset.busy; });
+  $('#cWinSub').innerHTML = !d.autostartKnown ? 'disponível depois de instalar' : auto ? '<b style="color:var(--ok)">Ligado</b> · sobe sozinho no boot' : '<b style="color:var(--bad)">Desligado</b> · precisa iniciar à mão';
+  $('#cWinSvc').textContent = `Serviço ${svcLabel(d.service)}` + (d.trayAutostart ? ' · ícone na bandeja' : '');
+  $('#svcLine').textContent = `Estado: ${svcLabel(d.service)}` + (d.autostartKnown ? (auto ? ' · início automático ligado' : ' · início automático DESLIGADO') : '');
+  $('#dataDir').textContent = d.dataDir || '—';
+
+  // KPIs
+  $('#kToday').textContent = fmt(s.forwardedToday);
+  $('#kTodayF').textContent = zero(s.lastSyncAt) ? 'recebidas em tempo real' : `última ${ago(s.lastSyncAt)}`;
+  $('#kFwd').textContent = fmt(s.forwardedTotal);
+  $('#kFwdF').textContent = `desde ${zero(s.startedAt) ? '—' : dt(s.startedAt)}`;
+  $('#kCursor').textContent = s.cursor ? fmt(s.cursor) : '—';
+  $('#kCursorF').textContent = s.maxDeviceId ? `maior id visto: ${fmt(s.maxDeviceId)}` : 'id do relógio já confirmado';
+  $('#kUsers').textContent = s.usersObserved ? fmt(s.usersObserved) : '—';
+  $('#kUsersF').textContent = zero(s.lastUserSyncAt) ? 'aguardando sincronizar' : `sincronizado ${ago(s.lastUserSyncAt)}`;
+
+  // saúde
+  $('#hErr').textContent = fmt(s.errorCount);
+  $('#hSkip').textContent = fmt(s.skippedNoTime);
+  $('#hNoReg').textContent = fmt(s.noRegistration);
+  $('#hNoReg').style.color = s.noRegistration ? 'var(--warn)' : '';
+  $('#hUp').textContent = zero(s.startedAt) ? '—' : dt(s.startedAt);
+  const showErr = !!s.lastError && !zero(s.lastErrorAt) && (Date.now() - new Date(s.lastErrorAt)) < 6*3600e3;
+  $('#hLastErr').hidden = !showErr;
+  if (showErr){ $('#hLastErrMsg').textContent = s.lastError; $('#hLastErrAt').textContent = ago(s.lastErrorAt); }
+
+  $('#hSyncErr').hidden = !s.userSyncError;
+  if (s.userSyncError){ $('#hSyncErrMsg').textContent = s.userSyncError; $('#hSyncErrAt').textContent = ago(s.userSyncErrorAt); }
+  ['#btnTestDevice', '#btnTestThera', '#btnRestart', '#btnStop'].forEach(id => { const el = $(id); if (el && !el.classList.contains('loading')) el.disabled = false; });
+  $('#btnRestart').disabled = !!s.fullSyncRunning;
+  $('#cfgSub').textContent = d.mode === 'setup' ? 'Preencha os dados do relógio e do Thera e salve. Depois clique em “Instalar e iniciar”.'
+    : s.reloadPending ? 'Configuração salva — passa a valer quando o refill em andamento terminar.'
+    : 'As alterações valem em poucos segundos — o coletor recarrega sozinho.';
+
+  // nav tags
+  $('#navRefillTag').hidden = !s.fullSyncRunning;
+  $('#navCfgTag').hidden = d.configValid !== false && d.mode !== 'setup';
+
+  renderFeed(s.recentPunches || []);
+  renderRefill(d);
+  $('#btnCollect').disabled = d.mode === 'setup' || !d.configValid || s.fullSyncRunning;
+}
+
+let feedKey = null;
+function renderFeed(list){
+  const key = list.map(p => p.id).join(',');
+  if (key === feedKey) { $$('#feed [data-sent]').forEach(el => el.textContent = ago(el.dataset.sent)); return; }
+  const first = feedKey === null, prev = new Set((feedKey || '').split(','));
+  feedKey = key;
+  const ul = $('#feed');
+  if (!list.length){
+    ul.innerHTML = `<li class="empty" style="display:block">${icon('clock')}<div>Nenhuma batida desde que o coletor ligou.</div><div class="hint">Elas aparecem aqui assim que alguém bater o ponto.</div></li>`;
+    return;
+  }
+  ul.innerHTML = list.map(p => {
+    const t = epoch(p.time), reg = p.registration;
+    const ini = reg ? reg.replace(/^0+/, '').slice(-3) || '0' : '?';
+    const today = isoDay(t) === isoDay(new Date());
+    return `<li class="${first || prev.has(String(p.id)) ? '' : 'new'}">
+      <div class="av">${esc(ini)}</div>
+      <div style="min-width:0"><div class="who">${reg ? 'Matrícula ' + esc(reg) : '<span style="color:var(--warn)">Sem matrícula no relógio</span>'}</div>
+      <div class="sub">usuário ${esc(p.userId)} · registro ${fmt(p.id)}</div></div>
+      <div class="when"><b>${hm(t)}</b><span class="hint">${today ? '' : dm(t) + ' · '}enviada <span data-sent="${esc(p.sentAt)}">${ago(p.sentAt)}</span></span></div></li>`;
+  }).join('');
+}
+
+/* ---------- refill ---------- */
+let rfMode = 'all';
+function refillSourceText(src){ return src === 'thera' ? 'pedido pelo Thera' : src === 'bandeja' ? 'pedido pela bandeja' : src ? 'pedido pelo painel' : ''; }
+function refillInsights(r, resumable){
+  const out = [];
+  if (!r) return out;
+  if (r.error) out.push(['bad', 'x-circle', `<b>O refill parou antes do fim:</b> ${esc(r.error)}. ` + (resumable ? 'Use “Retomar um refill interrompido” para continuar de onde parou.' : 'Confira a conexão e clique em “Iniciar refill” de novo — nada é duplicado.')]);
+  if (r.rotatedGap > 0) out.push(['warn', 'alert', `<b>O relógio já apagou ${fmt(r.rotatedGap)} registros antigos</b> (ids ${fmt(r.fromId + 1)} a ${fmt(r.deviceMinId - 1)}). A memória dele é limitada: essas batidas não podem mais ser lidas deste aparelho — só existem no Thera se tinham sido enviadas antes.`]);
+  if (r.noRegistration > 0) out.push(['warn', 'users', `<b>${fmt(r.noRegistration)} batidas são de pessoas sem matrícula no relógio.</b> O Thera só aceita essas se houver um vínculo manual. Confira o campo “matrícula” do cadastro no Control iD ou use a <a href="#config">matrícula manual</a>.`]);
+  if (r.skippedNoTime > 0) out.push(['warn', 'clock', `${fmt(r.skippedNoTime)} registros vieram sem horário do relógio e foram recusados (para não gravar horário errado).`]);
+  if (!r.error && r.read === 0) out.push(['info', 'info', `O relógio não tinha nenhuma batida nesse intervalo${r.deviceMinId ? ` (o registro mais antigo guardado nele é o id ${fmt(r.deviceMinId)})` : ''}.`]);
+  if (!r.error && r.forwarded > 0) out.push(['ok', 'check-circle', `<b>${fmt(r.forwarded)} batidas reenviadas ao Thera.</b> As que já existiam foram ignoradas; as que faltavam entram agora no cartão de ponto.`]);
+  return out;
+}
+function renderRefillResult(r, el, compact, resumable){
+  if (!r){ el.innerHTML = `<div class="empty" style="padding:14px 0">${icon('refill')}<div>Nenhum refill feito ainda neste computador.</div></div>`; return; }
+  const stats = compact ? '' : `<div class="stats" style="margin-bottom:4px">
+      <div class="stat"><div class="l">Lidas do relógio</div><div class="v num">${fmt(r.read)}</div></div>
+      <div class="stat ${r.forwarded ? 'ok' : ''}"><div class="l">Enviadas ao Thera</div><div class="v num">${fmt(r.forwarded)}</div></div>
+      <div class="stat ${r.noRegistration ? 'warn' : ''}"><div class="l">Sem matrícula</div><div class="v num">${fmt(r.noRegistration)}</div></div>
+      <div class="stat ${r.rotatedGap ? 'warn' : ''}"><div class="l">Já apagadas do relógio</div><div class="v num">${fmt(r.rotatedGap)}</div></div>
+    </div>
+    <div class="hint" style="margin-top:8px">Registros ${fmt(r.fromId)} → ${fmt(r.toId)} · período ${periodText(r.fromUnix, r.toUnix)} · ${r.verified ? 'leitura até o fim confirmada ✓' : 'sem confirmação de fim'} · duração ${dur(r.durationMs)}${r.note ? ' · ' + esc(r.note) : ''}</div>`;
+  const ins = refillInsights(r, resumable).slice(0, compact ? 2 : 9).map(([k, ic, h]) => `<div class="insight ${k}">${icon(ic)}<div>${h}</div></div>`).join('');
+  el.innerHTML = stats + ins;
+}
+function renderRefill(d){
+  const s = d.state, running = !!s.fullSyncRunning;
+  $('#rfRunning').hidden = !running;
+  $('#btnRefill').disabled = running || d.mode === 'setup' || !d.configValid;
+  $('#btnResume').hidden = !s.refillResumable || running || d.mode === 'setup';
+  $('#btnResume').disabled = false;
+  if (running){
+    const start = s.fullSyncStartId > 0 ? s.fullSyncStartId : 0, target = s.fullSyncTargetId, cur = s.fullSyncCurrentId;
+    const bar = $('#rfBar');
+    if (target > start && cur >= start){
+      const pct = Math.min(99, Math.max(1, Math.round((cur - start) / (target - start) * 100)));
+      bar.classList.remove('indet'); bar.firstElementChild.style.width = pct + '%'; $('#rfPct').textContent = pct + '%';
+    } else { bar.classList.add('indet'); $('#rfPct').textContent = 'Lendo…'; }
+    $('#rfRunSub').textContent = target ? `registro ${fmt(cur)} de ~${fmt(target)}` : '';
+    $('#rfRead').textContent = fmt(s.fullSyncReadTotal); $('#rfSent').textContent = fmt(s.fullSyncForwarded);
+    $('#rfCur').textContent = cur ? fmt(cur) : '—';
+    $('#rfPeriod').textContent = periodText(s.fullSyncFromUnix, s.fullSyncToUnix);
+    $('#rfRunSrc').textContent = refillSourceText(s.fullSyncSource);
+    $('#rfElapsed').textContent = zero(s.fullSyncStartedAt) ? '' : `começou ${ago(s.fullSyncStartedAt)}`;
+  }
+  // último resultado
+  const r = s.fullSyncLast;
+  $('#rfLastWhen').textContent = r ? `${dt(s.fullSyncLastAt)} · ${ago(s.fullSyncLastAt)}` : '';
+  const key = r ? (s.fullSyncLastAt + (running ? 'r' : '') + (s.refillResumable ? 'R' : '')) : 'none';
+  if ($('#rfLast').dataset.key !== key){ $('#rfLast').dataset.key = key; renderRefillResult(r, $('#rfLast'), false, s.refillResumable); }
+  // card na visão geral
+  const ov = $('#ovRefillBody');
+  if (running){
+    ov.dataset.key = '';
+    ov.innerHTML = `<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px"><span class="pill brand"><span class="dot pulse"></span>rodando</span><span class="muted">${esc(refillSourceText(s.fullSyncSource))}</span></div>
+      <div class="progress ${$('#rfBar').classList.contains('indet') ? 'indet' : ''}"><i style="width:${$('#rfBar').firstElementChild.style.width || '0'}"></i></div>
+      <div class="hint" style="margin-top:8px">${fmt(s.fullSyncForwarded)} enviadas · ${fmt(s.fullSyncReadTotal)} lidas</div>`;
+  } else if (ov.dataset.key !== key){
+    ov.dataset.key = key;
+    if (!r) ov.innerHTML = d.mode === 'setup' ? `<div class="muted">Depois de instalado, aqui você reenvia ao Thera as batidas que o relógio guarda — sem duplicar nada.</div>` : `<div class="muted" style="margin-bottom:12px">Faltou alguma batida no cartão? Reenvie o que o relógio guarda — sem duplicar nada.</div><a class="btn soft" href="#refill">${icon('refill')}Fazer refill</a>`;
+    else {
+      ov.innerHTML = `<div style="display:flex;align-items:center;gap:10px;margin-bottom:2px">${r.error ? '<span class="pill bad">interrompido</span>' : '<span class="pill ok">concluído</span>'}<span class="muted">${ago(s.fullSyncLastAt)}</span></div><div class="ovr"></div>`;
+      renderRefillResult(r, ov.querySelector('.ovr'), true, s.refillResumable);
     }
-  }catch(e){}
+  }
 }
+function setRfMode(m){
+  rfMode = m;
+  $$('#rfTiles .tile').forEach(t => t.classList.toggle('on', t.dataset.mode === m || (m === 'days' && t.dataset.mode === 'since')));
+  $('#rfSinceBox').hidden = !(m === 'since' || m === 'days');
+  $('#rfPeriodBox').hidden = m !== 'period';
+  updateRfSummary();
+}
+function rfBody(){
+  if (rfMode === 'all') return {mode:'all'};
+  if (rfMode === 'since' || rfMode === 'days') return {mode:'since', from: $('#rfSince').value};
+  return {mode:'period', from: $('#rfFrom').value, to: $('#rfTo').value};
+}
+function updateRfSummary(){
+  const b = rfBody(); let t = '';
+  const fd = v => v ? dmy(new Date(v + 'T12:00:00')) : '';
+  if (b.mode === 'all') t = 'Vai reenviar tudo o que o relógio guarda.';
+  else if (b.mode === 'since') t = b.from ? `Vai reenviar as batidas de ${fd(b.from)} até agora.` : 'Escolha a data inicial.';
+  else t = (b.from || b.to) ? `Vai reenviar as batidas de ${fd(b.from) || 'o início'} até ${fd(b.to) || 'agora'}.` : 'Escolha o período.';
+  $('#rfSummary').textContent = t;
+}
+$$('#rfTiles .tile').forEach(t => t.onclick = () => { $$('#rfChips .chip').forEach(c => c.classList.remove('on')); setRfMode(t.dataset.mode); });
+$$('#rfChips .chip').forEach(c => c.onclick = () => {
+  const d = new Date(); d.setDate(d.getDate() - (Number(c.dataset.days) - 1));
+  $('#rfSince').value = isoDay(d);
+  $$('#rfChips .chip').forEach(x => x.classList.toggle('on', x === c));
+  setRfMode('days');
+});
+['#rfSince','#rfFrom','#rfTo'].forEach(id => $(id).addEventListener('input', () => { $$('#rfChips .chip').forEach(c => c.classList.remove('on')); updateRfSummary(); }));
+$('#rfSince').max = $('#rfFrom').max = $('#rfTo').max = isoDay(new Date());
 
-// ---- config ----
+$('#btnRefill').onclick = async () => {
+  const b = rfBody();
+  if (b.mode === 'since' && !b.from) return toast('Escolha a data inicial do refill.', 'bad');
+  if (b.mode === 'period' && !b.from && !b.to) return toast('Escolha ao menos uma data do período.', 'bad');
+  if (b.mode === 'period' && b.from && b.to && b.to < b.from) return toast('A data final é anterior à inicial.', 'bad');
+  const ok = await confirmModal({title:'Iniciar refill?', ok:'Iniciar refill', body:`${esc($('#rfSummary').textContent)}<br><br>O Thera ignora o que já tinha, então <b>não duplica nada</b>. Enquanto o refill roda, a coleta normal espera e volta sozinha no fim.`});
+  if (!ok) return;
+  try { await post('/api/refill', Object.assign(b, {source:'painel'})); toast('Refill iniciado. Acompanhe o progresso aqui.', 'ok'); poll(); }
+  catch (e){ toast(e.message, 'bad', 'Não consegui iniciar'); }
+};
+$('#btnCancelRefill').onclick = async () => {
+  const ok = await confirmModal({title:'Parar o refill?', ok:'Parar refill', danger:true, body:'O que já foi enviado fica no Thera. O progresso é salvo: depois dá para <b>retomar de onde parou</b>. A coleta normal volta em seguida.'});
+  if (!ok) return;
+  try { await post('/api/refill/cancel'); toast('Refill parado. Dá para retomar depois.', 'info'); poll(); }
+  catch (e){ toast(e.message, 'bad'); }
+};
+$('#btnResume').onclick = async () => {
+  const ok = await confirmModal({title:'Retomar refill?', ok:'Retomar', body:'Continua o refill que foi interrompido (queda de energia, rede, reinício) a partir do último lote confirmado pelo Thera, com o <b>mesmo período</b> que tinha sido pedido.'});
+  if (!ok) return;
+  try { await post('/api/refill', {mode:'resume', source:'painel'}); toast('Retomando o refill.', 'ok'); poll(); }
+  catch (e){ toast(e.message, 'bad', 'Não consegui retomar'); }
+};
+
+/* ---------- ações ---------- */
+$('#btnCollect').onclick = e => withBusy(e.currentTarget, async () => {
+  try { await post('/api/collect-now'); toast('Coletando agora — as batidas novas aparecem em segundos.', 'ok'); setTimeout(poll, 1500); }
+  catch (err){ toast(err.message, 'bad'); }
+});
+async function testDevice(btn, useForm){
+  btn = btn || $('#btnTestDevice');
+  return withBusy(btn, async () => {
+    try { const r = await post('/api/test-device', useForm ? formCfg() : null); if (useForm) setTest('#tDev', r); toast(r.ok ? 'O relógio respondeu.' : r.error, r.ok ? 'ok' : 'bad', r.ok ? 'Conexão OK' : 'Relógio não respondeu'); }
+    catch (e){ toast(e.message, 'bad'); }
+  });
+}
+async function testThera(btn, useForm){
+  btn = btn || $('#btnTestThera');
+  return withBusy(btn, async () => {
+    try { const r = await post('/api/test-thera', useForm ? formCfg() : null); if (useForm) setTest('#tThera', r); toast(r.ok ? 'O Thera respondeu.' : r.error, r.ok ? 'ok' : 'bad', r.ok ? 'Conexão OK' : 'Thera não respondeu'); }
+    catch (e){ toast(e.message, 'bad'); }
+  });
+}
+function setTest(id, r){ const el = $(id); el.innerHTML = r.ok ? `<span class="pill ok">${icon('check')}respondeu</span>` : `<span class="pill bad">falhou</span> <span class="mono" style="font-size:12px">${esc(r.error)}</span>`; }
+// Configurações: testam o que está DIGITADO. Topo (hero): testam a config em uso.
+$('#btnTestDevice').onclick = e => testDevice(e.currentTarget, true);
+$('#btnTestThera').onclick = e => testThera(e.currentTarget, true);
+
+async function setAutostart(cb){
+  const want = cb.checked;
+  const both = ['#swAutostartTop', '#swAutostart'].map(id => $(id));
+  both.forEach(x => { x.dataset.busy = '1'; x.checked = want; });   // o poll não mexe enquanto decide
+  try {
+    if (!want){
+      const ok = await confirmModal({title:'Desligar o início automático?', ok:'Desligar', danger:true, body:'Depois de reiniciar o Windows, o coletor <b>não vai subir sozinho</b> e as batidas não chegam ao Thera até alguém iniciar à mão.'});
+      if (!ok){ both.forEach(x => x.checked = true); return; }
+    }
+    await post('/api/autostart', {enabled: want});
+    both.forEach(x => x.checked = want);
+    toast(want ? 'Pronto: o coletor sobe sozinho com o Windows.' : 'Início automático desligado.', want ? 'ok' : 'info');
+  } catch (e){ both.forEach(x => x.checked = !want); toast(e.message, 'bad', 'Não consegui alterar'); }
+  finally { both.forEach(x => delete x.dataset.busy); poll(); }
+}
+$('#swAutostartTop').onchange = e => setAutostart(e.target);
+$('#swAutostart').onchange = e => setAutostart(e.target);
+$('#btnRestart').onclick = async () => {
+  try { await post('/api/restart'); toast('Coleta reiniciada com a configuração atual.', 'ok'); } catch (e){ toast(e.message, 'bad'); }
+};
+$('#btnStop').onclick = async () => {
+  const ok = await confirmModal({title:'Parar o coletor?', ok:'Parar coletor', danger:true, body:'As batidas deixam de ir para o Thera e este painel fica sem resposta.<br><br>Com o <b>início automático ligado</b>, o ícone da bandeja religa o coletor em até 1 minuto (ele precisa estar sempre rodando). Para uma parada de manutenção, desligue antes o “Iniciar com o Windows”.'});
+  if (!ok) return;
+  try { await post('/api/service/stop'); } catch (e){ /* o próprio serviço cai junto com a resposta */ }
+  toast('Coletor parando…', 'info');
+};
+async function install(btn){
+  if (dirty){ toast('Salve a configuração antes de instalar.', 'bad'); location.hash = '#config'; return; }
+  const ok = await confirmModal({title:'Instalar o coletor?', ok:'Instalar e iniciar', body:'O coletor será instalado em <b>C:\\ProgramData\\PontoParColetor</b>, vai começar a coletar agora e <b>subir sozinho toda vez que o Windows ligar</b>.<br><br>O Windows vai pedir permissão de administrador — clique em “Sim”.'});
+  if (!ok) return;
+  return withBusy(btn, async () => {
+    try { await post('/api/install'); toast('Confirme a permissão do Windows. O painel recarrega sozinho quando terminar.', 'info', 'Instalando…'); }
+    catch (e){ toast(e.message, 'bad', 'Não consegui instalar'); }
+  });
+}
+$('#btnInstallBanner').onclick = e => install(e.currentTarget);
+
+/* ---------- configuração ---------- */
+let cfg = null, cfgLoaded = false, dirty = false, segMode = 'attendance';
+const F = id => $('#f-' + id);
 async function loadConfig(){
-  const c = await api('/api/config');
-  window._cfg=c;
-  $('deviceIp').value=c.deviceIp||''; $('devicePort').value=c.devicePort||80; $('login').value=c.login||'';
-  $('password').value=c.password||''; $('deviceId').value=c.deviceId||''; $('theraBase').value=c.theraBase||'';
-  $('deviceSecret').value=c.deviceSecret||''; $('pollSeconds').value=c.pollSeconds||15;
-  $('batchSize').value=c.batchSize||500; $('maxRetries').value=(c.maxRetries??4); $('retryBackoffSeconds').value=(c.retryBackoffSeconds||2);
-  $('uiPort').value=(c.ui&&c.ui.port)||47114;
-  const f=c.facial||{}; $('idDist').value=f.identificationDistanceCm||50;
-  $('terminalMode').value=f.terminalMode||'attendance';
-  $('liveness').value=f.livenessMode?'1':'0'; $('region').value=f.limitDisplayRegion?'1':'0'; $('photo').value=f.enablePhotoUpload?'1':'0';
-  $('overrides').value=JSON.stringify(c.registrationOverrides||{},null,0);
+  try {
+    cfg = await api('/api/config'); cfgLoaded = true;
+    F('deviceIp').value = cfg.deviceIp || ''; F('devicePort').value = cfg.devicePort || 80; F('login').value = cfg.login || '';
+    F('password').value = cfg.password || ''; F('deviceId').value = cfg.deviceId ? String(cfg.deviceId) : ''; F('theraBase').value = cfg.theraBase || '';
+    F('deviceSecret').value = cfg.deviceSecret || ''; F('pollSeconds').value = cfg.pollSeconds || 15;
+    F('batchSize').value = cfg.batchSize || 500; F('forwardBatch').value = cfg.forwardBatch || 200;
+    F('maxRetries').value = cfg.maxRetries ?? 4; F('retryBackoffSeconds').value = cfg.retryBackoffSeconds || 2;
+    const f = cfg.facial || {};
+    F('idDist').value = f.identificationDistanceCm || 50;
+    F('liveness').checked = !!f.livenessMode; F('region').checked = !!f.limitDisplayRegion; F('photo').checked = !!f.enablePhotoUpload;
+    setSeg(f.terminalMode || 'attendance');
+    F('overrides').value = JSON.stringify(cfg.registrationOverrides || {}, null, 2);
+    setDirty(false);
+  } catch (e){ toast(e.message, 'bad', 'Não carreguei a configuração'); }
 }
-async function saveConfig(){
-  const c = Object.assign({}, window._cfg||{});
-  c.deviceIp=$('deviceIp').value.trim(); c.devicePort=+$('devicePort').value; c.login=$('login').value.trim();
-  c.password=$('password').value; c.deviceId=$('deviceId').value.trim(); c.theraBase=$('theraBase').value.trim();
-  c.deviceSecret=$('deviceSecret').value.trim(); c.pollSeconds=+$('pollSeconds').value;
-  c.batchSize=+$('batchSize').value; c.maxRetries=+$('maxRetries').value; c.retryBackoffSeconds=+$('retryBackoffSeconds').value;
-  c.ui=Object.assign({}, c.ui||{}, {port:+$('uiPort').value});
-  c.facial=Object.assign({}, c.facial||{}, {
-    identificationDistanceCm:+$('idDist').value, terminalMode:$('terminalMode').value,
-    livenessMode:$('liveness').value==='1', limitDisplayRegion:$('region').value==='1', enablePhotoUpload:$('photo').value==='1' });
-  try{ c.registrationOverrides = JSON.parse($('overrides').value||'{}'); }
-  catch(e){ toast('Mapeamento manual não é um JSON válido', false); return; }
-  try{ await api('/api/config',{method:'POST',body:JSON.stringify(c)}); window._cfg=c; toast('Configuração salva. Aplicando…'); }
-  catch(e){ toast('Não salvou: '+e.message, false); }
+function setSeg(v){ segMode = v === 'access' ? 'access' : 'attendance'; $$('#segMode button').forEach(b => b.classList.toggle('on', b.dataset.v === segMode)); }
+$$('#segMode button').forEach(b => b.onclick = () => { setSeg(b.dataset.v); setDirty(true); });
+function setDirty(v){ dirty = v; $('#savebar').classList.toggle('show', v); }
+$('#cfgForm').addEventListener('input', e => { if (e.target.closest('.form-sec') && !e.target.closest('#swAutostart')) setDirty(true); });
+$('#swAutostart').addEventListener('input', e => e.stopPropagation());
+$$('[data-eye]').forEach(b => b.onclick = () => { const i = $('#' + b.dataset.eye); i.type = i.type === 'password' ? 'text' : 'password'; });
+$('#btnDiscard').onclick = () => loadConfig();
+// ID do aparelho: só dígitos e dentro de int64 (o Control iD usa ids de 16 dígitos).
+const validDeviceId = v => /^\d{1,19}$/.test(v) && BigInt(v) <= 9223372036854775807n;
+// formCfg monta a config a partir do formulário (o que está NA TELA). Os testes
+// usam isto, então testam o que foi digitado, mesmo antes de salvar.
+function formCfg(){
+  if (!cfgLoaded) return null;
+  const c = Object.assign({}, cfg || {});
+  c.deviceIp = F('deviceIp').value.trim(); c.devicePort = +F('devicePort').value || 80; c.login = F('login').value.trim();
+  c.password = F('password').value; c.theraBase = F('theraBase').value.trim(); c.deviceSecret = F('deviceSecret').value.trim();
+  const did = F('deviceId').value.trim();
+  c.deviceId = validDeviceId(did) ? did : '0';
+  return c;
+}
+$('#btnSave').onclick = async () => {
+  const c = Object.assign({}, cfg || {});
+  c.deviceIp = F('deviceIp').value.trim(); c.devicePort = +F('devicePort').value || 80; c.login = F('login').value.trim();
+  c.password = F('password').value; c.theraBase = F('theraBase').value.trim(); c.deviceSecret = F('deviceSecret').value.trim();
+  const did = F('deviceId').value.trim();
+  if (did && !validDeviceId(did)) return toast('O ID do aparelho deve ter só números (até 19 dígitos).', 'bad');
+  c.deviceId = did || '0';
+  c.pollSeconds = +F('pollSeconds').value || 15; c.batchSize = +F('batchSize').value || 500; c.forwardBatch = +F('forwardBatch').value || 200;
+  c.maxRetries = +F('maxRetries').value; c.retryBackoffSeconds = +F('retryBackoffSeconds').value || 2;
+  c.facial = Object.assign({}, c.facial || {}, {identificationDistanceCm: +F('idDist').value || 50, terminalMode: segMode,
+    livenessMode: F('liveness').checked, limitDisplayRegion: F('region').checked, enablePhotoUpload: F('photo').checked});
+  try { c.registrationOverrides = JSON.parse(F('overrides').value || '{}'); }
+  catch (e){ return toast('A matrícula manual não é um JSON válido.', 'bad'); }
+  const btn = $('#btnSave');
+  await withBusy(btn, async () => {
+    try {
+      await post('/api/config', c); cfg = c; setDirty(false);
+      const msg = S && S.mode === 'setup' ? 'Configuração salva. Agora clique em “Instalar e iniciar”.'
+        : (S && S.state.fullSyncRunning) ? 'Configuração salva. Ela passa a valer quando o refill em andamento terminar.'
+        : 'Configuração salva. O coletor já está aplicando.';
+      toast(msg, 'ok'); poll();
+    }
+    catch (e){ toast(e.message, 'bad', 'Não salvei'); }
+  });
+};
+
+/* ---------- registros ---------- */
+let logTab = 'log', logFilter = 'all';
+$$('#logTabs button').forEach(b => b.onclick = () => { logTab = b.dataset.t; $$('#logTabs button').forEach(x => x.classList.toggle('on', x === b)); $('#logCard').hidden = logTab !== 'log'; $('#auditCard').hidden = logTab !== 'audit'; if (logTab === 'audit') refreshAudit(); else refreshLog(); });
+$$('#logFilter button').forEach(b => b.onclick = () => { logFilter = b.dataset.f; $$('#logFilter button').forEach(x => x.classList.toggle('on', x === b)); lastLog = ''; refreshLog(); });
+let lastLog = '';
+async function refreshLog(){
+  if (view !== 'logs' || logTab !== 'log') return;
+  try {
+    const raw = await api('/api/log?bytes=60000');
+    if (raw === lastLog) return; lastLog = raw;
+    let lines = raw.split('\n'); if (raw.length >= 60000) lines.shift();
+    if (logFilter === 'err') lines = lines.filter(l => / ERRO /.test(l));
+    if (logFilter === 'punch') lines = lines.filter(l => /batida encaminhada|refill|full-sync/i.test(l));
+    const html = lines.filter(Boolean).map(l => {
+      const m = /^(\S+)\s(.*)$/.exec(l); if (!m) return esc(l);
+      let ts = m[1]; const d = new Date(ts); if (!isNaN(d)) ts = d.toLocaleString('pt-BR', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit'});
+      const body = m[2], cls = body.startsWith('ERRO ') ? 'e' : /encaminhada|concluíd|disponível/.test(body) ? 'ok' : '';
+      return `<span class="ts">${esc(ts)}</span>  <span class="${cls}">${esc(body)}</span>`;
+    }).join('\n');
+    const el = $('#log');
+    el.innerHTML = html || '<span class="ts">nada por aqui ainda</span>';
+    if ($('#logFollow').checked) el.scrollTop = el.scrollHeight;
+  } catch (e){}
+}
+async function refreshAudit(){
+  try {
+    const recs = await api('/api/audit?n=200');
+    const tb = $('#auditBody');
+    tb.innerHTML = recs.length ? recs.slice(0, 120).map(r => {
+      const kind = r.error ? '<span class="pill bad">erro</span>' : r.mode === 'incremental' ? '<span class="pill">tempo real</span>' : r.mode === 'full-partial' ? '<span class="pill warn">refill parcial</span>' : '<span class="pill brand">refill</span>';
+      return `<tr><td>${dt(r.time)}</td><td>${kind}</td><td class="n">${fmt(r.fromId)}</td><td class="n">${fmt(r.toId)}</td><td class="n">${fmt(r.read)}</td><td class="n">${fmt(r.forwarded)}</td>
+        <td class="n">${fmt(r.skippedNoTime)}</td><td class="n">${fmt(r.noRegistration)}</td><td class="n">${fmt(r.rotatedGap)}</td><td>${r.verified ? '<span style="color:var(--ok)">✓</span>' : '<span class="faint">—</span>'}</td>
+        <td class="muted" title="${esc(r.error)}">${esc((r.error || '').slice(0, 48))}</td></tr>`;
+    }).join('') : '<tr><td colspan="11" class="muted">Nenhuma sincronização registrada ainda.</td></tr>';
+  } catch (e){}
+}
+async function refreshRefillHistory(){
+  try {
+    const full = await api('/api/audit?mode=full&n=30');
+    $('#rfHist').innerHTML = full.length ? full.map(r => {
+      const src = /Thera/i.test(r.note || '') ? 'Thera' : /bandeja/i.test(r.note || '') ? 'Bandeja' : 'Painel';
+      const res = r.error ? `<span class="pill bad" title="${esc(r.error)}">interrompido</span>` : r.rotatedGap ? '<span class="pill warn">com lacuna</span>' : '<span class="pill ok">concluído</span>';
+      return `<tr><td>${dt(r.time)}</td><td>${src}</td><td>${periodText(r.fromUnix, r.toUnix)}</td><td class="n">${fmt(r.read)}</td><td class="n">${fmt(r.forwarded)}</td><td class="n">${fmt(r.noRegistration)}</td><td class="n">${fmt(r.rotatedGap)}</td><td>${res}</td></tr>`;
+    }).join('') : '<tr><td colspan="8" class="muted">Nenhum refill registrado ainda.</td></tr>';
+  } catch (e){ $('#rfHist').innerHTML = `<tr><td colspan="8" class="muted">Não consegui ler o histórico: ${esc(e.message)}</td></tr>`; }
 }
 
-// ---- actions ----
-$('btnSave').onclick=saveConfig;
-$('btnTestDevice').onclick=async()=>{ try{ const r=await api('/api/test-device',{method:'POST'}); toast(r.ok?'Control iD respondeu ✓':'Falhou: '+r.error, r.ok);}catch(e){toast(e.message,false);} };
-$('btnTestThera').onclick=async()=>{ try{ const r=await api('/api/test-thera',{method:'POST'}); toast(r.ok?'Thera respondeu ✓':'Falhou: '+r.error, r.ok);}catch(e){toast(e.message,false);} };
-$('btnFull').onclick=async()=>{ const s=+$('fsStart').value||0; const fromDate=$('fsFrom').value||''; const toDate=$('fsTo').value||''; const msg=(fromDate||toDate)?('Full-sync do período '+(fromDate||'início')+' → '+(toDate||'fim')+' iniciado'):'Full-sync iniciado'; try{ await api('/api/fullsync',{method:'POST',body:JSON.stringify({startId:s,fromDate,toDate})}); toast(msg); refreshStatus();}catch(e){toast(e.message,false);} };
-$('btnFullResume').onclick=async()=>{ try{ await api('/api/fullsync',{method:'POST',body:JSON.stringify({startId:-1})}); toast('Retomando full-sync');refreshStatus();}catch(e){toast(e.message,false);} };
-$('autostart').onchange=async(e)=>{ try{ await api('/api/autostart',{method:'POST',body:JSON.stringify({enabled:e.target.checked})}); toast('Início automático: '+(e.target.checked?'ligado':'desligado'));}catch(err){toast(err.message,false);e.target.checked=!e.target.checked;} };
-$('btnStart').onclick=async()=>{ try{ await api('/api/service/start',{method:'POST'}); toast('Serviço iniciado');refreshStatus();}catch(e){toast(e.message,false);} };
-$('btnStop').onclick=async()=>{ if(!confirm('Parar a coleta? O serviço deixa de receber batidas até ser iniciado de novo.'))return; try{ await api('/api/service/stop',{method:'POST'}); toast('Serviço parado');refreshStatus();}catch(e){toast(e.message,false);} };
+// Coletor sem resposta: a página toda mostra isso (não só o topo), e as ações
+// ficam desabilitadas até ele voltar.
+function renderLost(){
+  document.body.classList.add('lost');
+  $('#navRefillTag').hidden = true;
+  $('#sideSvc').textContent = 'sem resposta'; $('#sideDot').style.color = '#fb7185';
+  ['#cDevPill', '#cTheraPill'].forEach(id => pill($(id), '', '—'));
+  ['#btnCollect', '#btnRefill', '#btnResume', '#btnTestDevice', '#btnTestThera', '#btnRestart', '#btnStop', '#swAutostartTop', '#swAutostart'].forEach(id => { const el = $(id); if (el) el.disabled = true; });
+}
 
-loadConfig().catch(e=>toast('Não carregou config: '+e.message,false));
-refreshStatus(); refreshLog(); refreshAudit();
-setInterval(refreshStatus, 2000);
+/* ---------- loop ---------- */
+let polling = false, modeWarned = false;
+async function poll(){
+  if (polling) return; polling = true;
+  try {
+    const d = await api('/api/status', {timeout: 5000});
+    if (d.mode !== PAGE_MODE){
+      // setup → serviço instalado: outra página (outro token, outro modo).
+      if (!dirty){ location.reload(); return; }
+      if (!modeWarned){ modeWarned = true; toast('O coletor foi instalado. Salve ou descarte as alterações para atualizar o painel.', 'info'); }
+    }
+    if (lost){ lost = false; document.body.classList.remove('lost'); toast('O coletor voltou a responder.', 'ok'); }
+    lastOk = Date.now();
+    renderStatus(d);
+  } catch (e){
+    if (Date.now() - lastOk > 6000 && S){ if (!lost) { lost = true; } renderHero(S); renderLost(); }
+  } finally { polling = false; }
+}
+route();
+poll();
+setInterval(poll, 2000);
 setInterval(refreshLog, 3000);
-setInterval(refreshAudit, 8000);
+setInterval(() => { if (view === 'refill') refreshRefillHistory(); if (view === 'logs' && logTab === 'audit') refreshAudit(); }, 10000);
+if (PAGE_MODE === 'setup' && !location.hash) location.hash = '#config';
 </script>
 </body>
 </html>

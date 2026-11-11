@@ -5,6 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/p-lacerda/pontopar-coletor/internal/audit"
 )
 
 func TestSettersAndSnapshot(t *testing.T) {
@@ -71,5 +74,43 @@ func TestFullSyncLifecycle(t *testing.T) {
 	snap = s.Get()
 	if snap.FullSyncRunning || snap.FullSyncLastResult != "ok: 480 enviadas" {
 		t.Fatalf("done inesperado: %+v", snap)
+	}
+}
+
+func TestRecordPunchTodayRingAndRestore(t *testing.T) {
+	dir := t.TempDir()
+	s := New(dir, "v")
+	now := time.Now()
+	for i := 0; i < recentMax+5; i++ {
+		s.RecordPunch(Punch{ID: int64(i + 1), UserID: "u", Registration: "0003", Time: now.Unix()})
+	}
+	s.RecordPunch(Punch{ID: 999, UserID: "x", Time: now.AddDate(0, 0, -2).Unix()}) // antiga e sem matrícula
+	snap := s.Get()
+	if len(snap.RecentPunches) != recentMax || snap.RecentPunches[0].ID != 999 {
+		t.Fatalf("feed deveria ter %d itens com o mais novo primeiro; veio %d (topo %d)", recentMax, len(snap.RecentPunches), snap.RecentPunches[0].ID)
+	}
+	if snap.ForwardedToday != int64(recentMax+5) {
+		t.Errorf("batidas hoje: quero %d (a de 2 dias atrás não conta), veio %d", recentMax+5, snap.ForwardedToday)
+	}
+	if snap.NoRegistration != 1 {
+		t.Errorf("sem matrícula: quero 1, veio %d", snap.NoRegistration)
+	}
+	s.FullSyncDone("ok", audit.Record{Forwarded: 10})
+	s.Flush()
+
+	// "Reinício do Windows": um estado novo na mesma pasta restaura o dia.
+	s2 := New(dir, "v")
+	snap2 := s2.Get()
+	if snap2.ForwardedToday != snap.ForwardedToday || len(snap2.RecentPunches) != recentMax {
+		t.Errorf("restauração: hoje=%d feed=%d", snap2.ForwardedToday, len(snap2.RecentPunches))
+	}
+	if snap2.FullSyncLast == nil || snap2.FullSyncLast.Forwarded != 10 {
+		t.Errorf("último refill não restaurado: %+v", snap2.FullSyncLast)
+	}
+
+	// Virou o dia: "batidas hoje" zera sozinho na leitura.
+	s2.now = func() time.Time { return now.AddDate(0, 0, 1) }
+	if got := s2.Get().ForwardedToday; got != 0 {
+		t.Errorf("no dia seguinte, batidas hoje deveria ser 0, veio %d", got)
 	}
 }

@@ -9,9 +9,11 @@ package main
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -20,6 +22,7 @@ import (
 	"github.com/lxn/walk"
 	"github.com/lxn/win"
 	"github.com/p-lacerda/pontopar-coletor/internal/winservice"
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -90,7 +93,7 @@ func runInstaller() error {
 		return err
 	}
 	mw.SetTitle(productName + " — Instalador")
-	_ = mw.SetIcon(walk.IconApplication())
+	// Sem SetIcon: o walk usa o ícone do PontoPar embutido no exe (recurso 7).
 	if err := mw.SetLayout(walk.NewVBoxLayout()); err != nil {
 		return err
 	}
@@ -343,6 +346,9 @@ func install(cfg installerConfig) error {
 	if len(collectorPayload) < 2 || collectorPayload[0] != 'M' || collectorPayload[1] != 'Z' {
 		return fmt.Errorf("pacote do coletor inválido; baixe um instalador oficial")
 	}
+	// Fecha o app da bandeja de todos os usuários ANTES de parar o serviço: ele
+	// roda o mesmo .exe (trava o arquivo) e o watchdog dele religaria o serviço.
+	closeTrays()
 	st, err := winservice.Status()
 	if err != nil {
 		return err
@@ -357,7 +363,7 @@ func install(cfg installerConfig) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("criar pasta de instalação: %w", err)
 	}
-	if err := writeAtomic(filepath.Join(dir, collectorName), collectorPayload); err != nil {
+	if err := replaceExe(filepath.Join(dir, collectorName), collectorPayload); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
@@ -383,10 +389,47 @@ func install(cfg installerConfig) error {
 	if err := registerUninstaller(setupDest); err != nil {
 		return fmt.Errorf("registrar desinstalador do Windows: %w", err)
 	}
+	// Abre o app (bandeja + painel) como o usuário, não como admin: o explorer
+	// lança o programa com o token não elevado da sessão.
+	_ = exec.Command(filepath.Join(os.Getenv("WINDIR"), "explorer.exe"), filepath.Join(dir, collectorName)).Start()
+	return nil
+}
+
+// closeTrays encerra o app da bandeja em todas as sessões de usuário (a sessão
+// 0, do serviço, fica de fora — ele é parado com flush pelo SCM).
+func closeTrays() {
+	cmd := exec.Command(filepath.Join(os.Getenv("WINDIR"), "System32", "taskkill.exe"), "/F", "/FI", "SESSION ne 0", "/IM", collectorName)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	_ = cmd.Run()
+}
+
+// replaceExe troca o executável mesmo que algum processo ainda o esteja usando:
+// um exe em execução não pode ser sobrescrito, mas pode ser RENOMEADO — move o
+// atual para .old (como o auto-update faz) e grava o novo no lugar. Só faz isso
+// quando o erro é de arquivo em uso; e se a segunda gravação falhar, devolve o
+// exe antigo ao lugar (nunca deixa a pasta sem coletor).
+func replaceExe(path string, data []byte) error {
+	err := writeAtomic(path, data)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, syscall.ERROR_ACCESS_DENIED) && !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
+		return err
+	}
+	old := path + ".old"
+	_ = os.Remove(old)
+	if rerr := os.Rename(path, old); rerr != nil {
+		return fmt.Errorf("liberar o coletor anterior: %w (gravação: %v)", rerr, err)
+	}
+	if err := writeAtomic(path, data); err != nil {
+		_ = os.Rename(old, path) // rollback: o coletor antigo continua instalado
+		return err
+	}
 	return nil
 }
 
 func uninstall() error {
+	closeTrays() // senão o watchdog da bandeja religaria o serviço
 	st, err := winservice.Status()
 	if err != nil {
 		return err

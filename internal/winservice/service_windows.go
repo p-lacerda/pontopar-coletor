@@ -11,10 +11,13 @@ package winservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/p-lacerda/pontopar-coletor/internal/autorun"
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/debug"
 	"golang.org/x/sys/windows/svc/eventlog"
@@ -34,6 +37,10 @@ const serviceDesc = "Coleta batidas do Control iD iDFace e encaminha ao Thera"
 // extra enquanto o coletor finaliza (flush) — evita o SCM matar o processo aos
 // ~30s antes do shutdown limpo.
 const stopWaitHintMs = 20000
+
+// exitUnexpected é o código de saída quando o coletor para sem o Windows pedir:
+// qualquer valor != 0 aciona o recovery (reinício automático).
+const exitUnexpected = 1067 // ERROR_PROCESS_ABORTED
 
 // elog é o log de eventos do serviço (Visualizador de Eventos), setado em Run.
 var elog debug.Log
@@ -77,6 +84,14 @@ loop:
 			default:
 				elog.Error(1, fmt.Sprintf("controle inesperado #%d", c.Cmd))
 			}
+		case <-done:
+			// O trabalho terminou SEM o Windows pedir (ex.: o supervisor saiu).
+			// Antes o serviço ficava "Em execução" sem coletar nada. Agora sai com
+			// código de erro: como o recovery vale também para falhas sem crash
+			// (SetRecoveryActionsOnNonCrashFailures), o SCM religa o coletor.
+			elog.Error(1, "o coletor parou sozinho; saindo com erro para o Windows reiniciar o serviço")
+			cancel()
+			return false, exitUnexpected
 		}
 	}
 
@@ -149,30 +164,62 @@ func Install(exePath string) error {
 	s, err := m.CreateService(ServiceName, exePath, mgr.Config{
 		DisplayName: serviceDisplay,
 		Description: serviceDesc,
-		StartType:   mgr.StartAutomatic, // auto-start no boot
-		// DelayedAutoStart: true, // opcional: esperar rede/serviços subirem
+		StartType:   mgr.StartAutomatic, // sobe no boot, sem ninguém logado
 	})
 	if err != nil {
 		return fmt.Errorf("criar servico: %w", err)
 	}
 	defer s.Close()
 
-	// Recovery: reinicia nas 3 primeiras falhas; zera o contador após 1 dia.
-	// Também é o mecanismo que reinicia o serviço após um auto-update (saída !=0).
-	err = s.SetRecoveryActions([]mgr.RecoveryAction{
+	if err := harden(s); err != nil {
+		_ = s.Delete()
+		return err
+	}
+
+	// Fonte do event log (Visualizador de Eventos). É só diagnóstico: uma fonte
+	// que sobrou de uma instalação anterior ("already exists") NÃO pode derrubar
+	// a instalação — antes isso apagava o serviço recém-criado em silêncio e o
+	// coletor nunca mais subia com o Windows.
+	if err = eventlog.InstallAsEventCreate(ServiceName, eventlog.Error|eventlog.Warning|eventlog.Info); err != nil &&
+		!strings.Contains(err.Error(), "already exists") {
+		// Best-effort: segue sem a fonte de eventos (o log em arquivo continua).
+		_ = err
+	}
+	return nil
+}
+
+// interactiveUsersSDDL é o descritor de segurança do serviço: o padrão do
+// Windows (SYSTEM e Administradores com controle total; usuários interativos
+// podem consultar) MAIS o direito de INICIAR (RP) para usuários interativos.
+// Assim o app da bandeja consegue religar o coletor sem pedir administrador.
+// Parar/reconfigurar continua restrito a Administradores e ao próprio serviço.
+const interactiveUsersSDDL = "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWRPLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)"
+
+// harden aplica o que torna o serviço confiável: recovery que reinicia SEMPRE
+// (também quando o processo sai com erro sem "crashar"), e a permissão de
+// iniciar para usuários interativos.
+func harden(s *mgr.Service) error {
+	// Recovery: reinicia em 5s, 15s e depois a cada 60s (a 3ª ação vale para
+	// todas as falhas seguintes); zera o contador após 1 dia. É também o
+	// mecanismo que relança o serviço após um auto-update (saída != 0).
+	if err := s.SetRecoveryActions([]mgr.RecoveryAction{
 		{Type: mgr.ServiceRestart, Delay: 5 * time.Second},
 		{Type: mgr.ServiceRestart, Delay: 15 * time.Second},
 		{Type: mgr.ServiceRestart, Delay: 60 * time.Second},
-	}, uint32((24 * time.Hour).Seconds())) // resetPeriod em SEGUNDOS
-	if err != nil {
-		_ = s.Delete()
+	}, uint32((24 * time.Hour).Seconds())); err != nil {
 		return fmt.Errorf("configurar recovery: %w", err)
 	}
-
-	// Fonte do event log (para elog.Info/Error do serviço).
-	if err = eventlog.InstallAsEventCreate(ServiceName, eventlog.Error|eventlog.Warning|eventlog.Info); err != nil {
-		_ = s.Delete()
-		return fmt.Errorf("registrar fonte de eventos: %w", err)
+	// Sem isto, um "parou com erro" reportado pelo próprio serviço (ex.: falha
+	// no arranque) NÃO dispara o recovery — e o coletor ficava parado até
+	// alguém notar.
+	if err := s.SetRecoveryActionsOnNonCrashFailures(true); err != nil {
+		return fmt.Errorf("configurar recovery para falhas sem crash: %w", err)
+	}
+	if sd, err := windows.SecurityDescriptorFromString(interactiveUsersSDDL); err == nil {
+		if dacl, _, derr := sd.DACL(); derr == nil {
+			// Best-effort: sem isto, a bandeja ainda consegue pedir elevação.
+			_ = windows.SetSecurityInfo(s.Handle, windows.SE_SERVICE, windows.DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+		}
 	}
 	return nil
 }
@@ -185,55 +232,135 @@ func Uninstall() error {
 	}
 	defer m.Disconnect()
 
+	_ = autorun.Disable() // o app da bandeja deixa de abrir no logon
+
 	s, err := m.OpenService(ServiceName)
 	if err != nil {
 		return fmt.Errorf("servico %s nao esta instalado", ServiceName)
 	}
 	defer s.Close()
 
+	// 1) Manual ANTES de parar: qualquer app da bandeja que ainda esteja aberto
+	// vê o início automático desligado e não religa o serviço (o watchdog só age
+	// com Automatic). 2) Para e espera parar. 3) Só então remove — sem isso o SCM
+	// só marcava para exclusão e o coletor seguia rodando até o reboot.
+	if cfg, cerr := s.Config(); cerr == nil {
+		cfg.StartType = mgr.StartManual
+		_ = s.UpdateConfig(cfg)
+	}
+	if st, qerr := s.Query(); qerr == nil && st.State != svc.Stopped {
+		if err := controlService(svc.Stop, svc.Stopped); err != nil {
+			return fmt.Errorf("parar o coletor antes de remover: %w", err)
+		}
+	}
+
 	if err = s.Delete(); err != nil {
 		return fmt.Errorf("remover servico: %w", err)
 	}
-	if err = eventlog.Remove(ServiceName); err != nil {
-		// Não fatal: o serviço já foi removido.
-		return fmt.Errorf("servico removido, mas falhou ao remover fonte de eventos: %w", err)
-	}
+	// Não fatal: o serviço já foi removido; a fonte de eventos é só diagnóstico.
+	_ = eventlog.Remove(ServiceName)
 	return nil
 }
 
-// Start inicia o serviço via SCM.
-func Start() error {
+// EnsureHealthy é o AUTORREPARO que o serviço roda a cada arranque (como
+// LocalSystem, sem UAC). Existe porque quem recebe uma versão nova pelo
+// auto-update NÃO passa pelo instalador: sem isto, essas máquinas ficavam sem o
+// app da bandeja no logon, sem a permissão de iniciar para usuários e sem o
+// recovery para falhas sem crash. Idempotente e best-effort: devolve o que
+// consertou (para o log) e o primeiro erro, mas nunca impede a coleta.
+func EnsureHealthy(exePath string) (fixed []string, err error) {
 	m, err := mgr.Connect()
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("conectar ao SCM: %w", err)
 	}
 	defer m.Disconnect()
 	s, err := m.OpenService(ServiceName)
 	if err != nil {
-		return fmt.Errorf("nao foi possivel acessar o servico: %w", err)
+		return nil, fmt.Errorf("abrir servico: %w", err)
 	}
 	defer s.Close()
-	if err := s.Start(); err != nil {
+	// Os passos são independentes: uma falha no recovery não pode impedir o
+	// registro do app no logon (e vice-versa). Reaplicar o harden é barato e
+	// idempotente, então não entra na lista de "consertos" do log.
+	var errs []error
+	if herr := harden(s); herr != nil {
+		errs = append(errs, herr)
+	}
+	cfg, cerr := s.Config()
+	if cerr != nil {
+		errs = append(errs, fmt.Errorf("ler configuracao do servico: %w", cerr))
+	} else if cfg.StartType == mgr.StartAutomatic && !autorun.Registered() {
+		// Com "Iniciar com o Windows" ligado, o app da bandeja tem de abrir no
+		// logon. Se o valor Run não existe, cria. Se existe mas o usuário o
+		// desabilitou no Gerenciador de Tarefas, respeita.
+		if aerr := autorun.Enable(exePath); aerr != nil {
+			errs = append(errs, aerr)
+		} else {
+			fixed = append(fixed, "app da bandeja registrado no logon")
+		}
+	}
+	return fixed, errors.Join(errs...)
+}
+
+// openLimited abre o serviço pedindo SÓ os direitos necessários. mgr.Connect()
+// pede SC_MANAGER_ALL_ACCESS, que um usuário comum não tem — por isso a tela
+// antiga mostrava "não foi possível consultar" para quem não era admin. Com
+// SC_MANAGER_CONNECT + o direito específico, consultar funciona para qualquer
+// usuário interativo e iniciar funciona depois do harden (ACL com RP para IU).
+func openLimited(access uint32) (scm, svcH windows.Handle, err error) {
+	scm, err = windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
+	if err != nil {
+		return 0, 0, fmt.Errorf("conectar ao SCM: %w", err)
+	}
+	name, _ := windows.UTF16PtrFromString(ServiceName)
+	svcH, err = windows.OpenService(scm, name, access)
+	if err != nil {
+		windows.CloseServiceHandle(scm)
+		return 0, 0, err
+	}
+	return scm, svcH, nil
+}
+
+// Start inicia o serviço via SCM (funciona sem admin após o harden).
+func Start() error {
+	scm, h, err := openLimited(windows.SERVICE_START | windows.SERVICE_QUERY_STATUS)
+	if err != nil {
+		if err == windows.ERROR_SERVICE_DOES_NOT_EXIST {
+			return fmt.Errorf("servico %s nao esta instalado", ServiceName)
+		}
+		return fmt.Errorf("nao foi possivel acessar o servico: %w", err)
+	}
+	defer windows.CloseServiceHandle(scm)
+	defer windows.CloseServiceHandle(h)
+	if err := windows.StartService(h, 0, nil); err != nil {
+		if err == windows.ERROR_SERVICE_ALREADY_RUNNING {
+			return ErrAlreadyRunning
+		}
 		return fmt.Errorf("nao foi possivel iniciar o servico: %w", err)
 	}
 	return nil
 }
 
+// ErrAlreadyRunning: Start foi chamado com o serviço já rodando (outro processo
+// — o recovery do Windows, outra bandeja — chegou antes). Não é falha.
+var ErrAlreadyRunning = errors.New("o servico ja esta rodando")
+
 // InstallAndStart deixa o coletor pronto para produção: instala caso ainda não
-// exista, preserva a configuração de auto-start/recovery e o inicia agora. É
-// chamado pelo processo elevado que a interface gráfica abre após o usuário
-// aceitar o UAC.
+// exista, REPARA uma instalação existente (caminho do exe, auto-start,
+// recovery, permissões), registra o app da bandeja no logon e inicia agora. É
+// idempotente: rodar de novo conserta o que estiver errado. É chamado pelo
+// instalador e pelo processo elevado que a bandeja abre após o UAC.
 func InstallAndStart(exePath string) error {
 	if err := Install(exePath); err != nil {
 		if !strings.Contains(err.Error(), "ja existe") {
 			return err
 		}
-		// Se o usuário substituiu o .exe em outra pasta, aproveita o clique
-		// elevado para garantir que o SCM aponte para esta cópia e continue em
-		// auto-start. Isso também transforma uma instalação antiga na atual.
 		if err := updateInstalledPath(exePath); err != nil {
 			return err
 		}
+	}
+	if err := autorun.Enable(exePath); err != nil {
+		return fmt.Errorf("registrar o app na inicialização do Windows: %w", err)
 	}
 	st, err := Status()
 	if err != nil {
@@ -242,7 +369,10 @@ func InstallAndStart(exePath string) error {
 	if st == "rodando" || st == "iniciando" {
 		return nil
 	}
-	return Start()
+	if err := Start(); err != nil && !errors.Is(err, ErrAlreadyRunning) {
+		return err
+	}
+	return waitState(svc.Running, 20*time.Second)
 }
 
 // updateInstalledPath atualiza uma instalação já existente sem recriar nem
@@ -262,21 +392,42 @@ func updateInstalledPath(exePath string) error {
 	if err != nil {
 		return fmt.Errorf("ler configuracao do servico: %w", err)
 	}
-	cfg.BinaryPathName = exePath
+	cfg.BinaryPathName = windows.EscapeArg(exePath) // aspas se houver espaço (evita "unquoted service path")
 	cfg.StartType = mgr.StartAutomatic
+	cfg.DelayedAutoStart = false
 	cfg.DisplayName = serviceDisplay
 	cfg.Description = serviceDesc
 	if err := s.UpdateConfig(cfg); err != nil {
 		return fmt.Errorf("atualizar configuracao do servico: %w", err)
 	}
-	return nil
+	return harden(s)
 }
 
-// SetAutoStart liga/desliga o "Iniciar com o Windows" do serviço, alternando o
-// StartType entre Automatic (sobe no boot) e DemandStart (manual). NÃO para nem
-// remove o serviço — só muda quando ele arranca. Rodando como LocalSystem (o
-// próprio serviço, via painel web) a mudança não pede UAC; rodando como usuário
-// comum (janela), exige elevação (SERVICE_CHANGE_CONFIG).
+// waitState espera o serviço chegar ao estado (ou o timeout).
+func waitState(to svc.State, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		st, err := Status()
+		if err != nil {
+			return err
+		}
+		if st == stateName(to) {
+			return nil
+		}
+		if st == "parado" && to == svc.Running {
+			return fmt.Errorf("o servico parou logo apos iniciar (veja o log em C:\\ProgramData\\PontoParColetor)")
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout esperando o servico ficar %s", stateName(to))
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+}
+
+// SetAutoStart liga/desliga o "Iniciar com o Windows": o StartType do serviço
+// (Automatic ↔ Manual) E o app da bandeja no logon. NÃO para nem remove o
+// serviço. Rodando como LocalSystem (o próprio serviço, via painel) não pede
+// UAC; rodando como usuário comum exige elevação.
 func SetAutoStart(enable bool) error {
 	m, err := mgr.Connect()
 	if err != nil {
@@ -294,27 +445,33 @@ func SetAutoStart(enable bool) error {
 	}
 	if enable {
 		cfg.StartType = mgr.StartAutomatic
+		cfg.DelayedAutoStart = false
 	} else {
 		cfg.StartType = mgr.StartManual
 	}
 	if err := s.UpdateConfig(cfg); err != nil {
 		return fmt.Errorf("atualizar inicio automatico: %w", err)
 	}
-	return nil
+	if enable {
+		if exe := strings.Trim(cfg.BinaryPathName, `"`); exe != "" {
+			if err := autorun.Enable(exe); err != nil {
+				return err
+			}
+		}
+		return harden(s)
+	}
+	return autorun.Disable()
 }
 
 // IsAutoStart diz se o serviço está configurado para iniciar com o Windows.
-// Erro se o serviço não estiver instalado.
+// Erro se o serviço não estiver instalado. Só pede SERVICE_QUERY_CONFIG.
 func IsAutoStart() (bool, error) {
-	m, err := mgr.Connect()
+	scm, h, err := openLimited(windows.SERVICE_QUERY_CONFIG)
 	if err != nil {
-		return false, fmt.Errorf("conectar ao SCM: %w", err)
+		return false, fmt.Errorf("servico %s nao esta instalado ou inacessivel: %w", ServiceName, err)
 	}
-	defer m.Disconnect()
-	s, err := m.OpenService(ServiceName)
-	if err != nil {
-		return false, fmt.Errorf("servico %s nao esta instalado", ServiceName)
-	}
+	defer windows.CloseServiceHandle(scm)
+	s := &mgr.Service{Name: ServiceName, Handle: h}
 	defer s.Close()
 	cfg, err := s.Config()
 	if err != nil {
@@ -358,23 +515,23 @@ func controlService(c svc.Cmd, to svc.State) error {
 	return nil
 }
 
-// Status devolve uma descrição legível do estado atual do serviço.
+// Status devolve uma descrição legível do estado atual do serviço. Funciona
+// para qualquer usuário (só pede SERVICE_QUERY_STATUS).
 func Status() (string, error) {
-	m, err := mgr.Connect()
+	scm, h, err := openLimited(windows.SERVICE_QUERY_STATUS)
 	if err != nil {
+		if err == windows.ERROR_SERVICE_DOES_NOT_EXIST {
+			return "nao instalado", nil
+		}
 		return "", err
 	}
-	defer m.Disconnect()
-	s, err := m.OpenService(ServiceName)
-	if err != nil {
-		return "nao instalado", nil
-	}
-	defer s.Close()
-	st, err := s.Query()
-	if err != nil {
+	defer windows.CloseServiceHandle(scm)
+	defer windows.CloseServiceHandle(h)
+	var st windows.SERVICE_STATUS
+	if err := windows.QueryServiceStatus(h, &st); err != nil {
 		return "", err
 	}
-	return stateName(st.State), nil
+	return stateName(svc.State(st.CurrentState)), nil
 }
 
 func stateName(s svc.State) string {

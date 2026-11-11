@@ -2,6 +2,8 @@ package config
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -96,5 +98,64 @@ func TestValidate(t *testing.T) {
 	invalid := Config{Login: "admin"}
 	if err := invalid.Validate(); err == nil {
 		t.Error("config incompleta deveria falhar na validacao")
+	}
+}
+
+// Reinstalar pelo Inno não pode apagar o que o assistente não pergunta.
+func TestApplyInstallFilePreservesUnaskedFields(t *testing.T) {
+	dir := t.TempDir()
+	old := Default()
+	old.DeviceSecret = "segredo-antigo"
+	old.RegistrationOverrides = map[string]string{"900000004": "0003"}
+	old.Update.Token = "ghp_token"
+	old.BatchSize = 250
+	if err := Save(dir, old); err != nil {
+		t.Fatal(err)
+	}
+	install := `{"deviceIp":"10.0.0.9","devicePort":80,"login":"admin","password":"nova","deviceId":"4409419584567168",
+	  "theraBase":"https://thera.example","deviceSecret":"segredo-novo","pollSeconds":20,
+	  "facial":{"identificationDistanceCm":60,"livenessMode":false,"limitDisplayRegion":true,"enablePhotoUpload":true}}`
+	if err := os.WriteFile(filepath.Join(dir, InstallFile), []byte(install), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	applied, err := ApplyInstallFile(dir)
+	if err != nil || !applied {
+		t.Fatalf("applied=%v err=%v", applied, err)
+	}
+	c, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.DeviceIp != "10.0.0.9" || c.DeviceSecret != "segredo-novo" || c.DeviceIdInt() != 4409419584567168 || c.PollSeconds != 20 {
+		t.Errorf("campos do assistente não aplicados: %+v", c)
+	}
+	if c.RegistrationOverrides["900000004"] != "0003" || c.Update.Token != "ghp_token" || c.BatchSize != 250 {
+		t.Errorf("campos não perguntados foram perdidos: overrides=%v token=%q batch=%d", c.RegistrationOverrides, c.Update.Token, c.BatchSize)
+	}
+	if c.Facial.IdentificationDistanceCm != 60 || c.Facial.LivenessMode || c.Facial.TerminalMode != "attendance" {
+		t.Errorf("facial mesclado errado: %+v", c.Facial)
+	}
+	if _, err := os.Stat(filepath.Join(dir, InstallFile)); !os.IsNotExist(err) {
+		t.Errorf("%s deveria ter sido apagado", InstallFile)
+	}
+	// Sem arquivo: no-op.
+	if applied, err := ApplyInstallFile(dir); applied || err != nil {
+		t.Errorf("sem arquivo deveria ser no-op: %v %v", applied, err)
+	}
+}
+
+func TestApplyInstallFileFreshInstallUsesDefaults(t *testing.T) {
+	dir := t.TempDir()
+	install := `{"deviceIp":"10.0.0.9","login":"admin","deviceId":"123","theraBase":"https://t","deviceSecret":"s"}`
+	_ = os.WriteFile(filepath.Join(dir, InstallFile), []byte(install), 0o600)
+	if _, err := ApplyInstallFile(dir); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Update.Repo != "p-lacerda/pontopar-coletor" || c.UIPort() != 47114 || c.BatchSizeOr() != 500 {
+		t.Errorf("defaults não aplicados numa instalação nova: %+v", c)
 	}
 }

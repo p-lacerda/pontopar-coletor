@@ -107,6 +107,60 @@ type PendingFullSync struct {
 	StartID  int64 `json:"startId"`
 	FromUnix int64 `json:"fromUnix"`
 	ToUnix   int64 `json:"toUnix"`
+	// CommandID identifica o comando persistido no Thera. Quando presente, o
+	// coletor confirma (ack) recebimento, execução e resultado — é o que deixa o
+	// RH ver no Thera se o refill rodou e o que ele achou. Servidores antigos
+	// (fila em memória) não mandam: aí não há ack.
+	CommandID string `json:"commandId,omitempty"`
+}
+
+// CommandResult é o resumo de um refill devolvido ao Thera no ack final.
+type CommandResult struct {
+	FromID         int64 `json:"fromId"`
+	ToID           int64 `json:"toId"`
+	Read           int   `json:"read"`
+	Forwarded      int   `json:"forwarded"`
+	SkippedNoTime  int   `json:"skippedNoTime"`
+	SkippedBadID   int   `json:"skippedBadId"`
+	NoRegistration int   `json:"noRegistration"`
+	RotatedGap     int64 `json:"rotatedGap"`
+	DeviceMinID    int64 `json:"deviceMinId"`
+	Verified       bool  `json:"verified"`
+	DurationMs     int64 `json:"durationMs"`
+}
+
+// Estados aceitos pelo POST .../commands/ack.
+const (
+	AckRunning = "running"
+	AckDone    = "done"
+	AckFailed  = "failed"
+)
+
+// AckCommand confirma ao Thera o andamento de um comando remoto. Best-effort:
+// um servidor sem a rota (404) não pode atrapalhar o refill em si.
+func (c *Client) AckCommand(ctx context.Context, commandID, status string, result *CommandResult, errMsg string) error {
+	if strings.TrimSpace(commandID) == "" {
+		return nil
+	}
+	body := map[string]any{"commandId": commandID, "status": status}
+	if result != nil {
+		body["result"] = result
+	}
+	if errMsg != "" {
+		body["error"] = errMsg
+	}
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	data, code, err := c.request(ctx, http.MethodPost, c.commandsURL+"/ack", bytes.NewReader(buf), "application/json")
+	if err != nil {
+		return err
+	}
+	if code < 200 || code >= 300 {
+		return fmt.Errorf("Thera /commands/ack respondeu %d: %s", code, strings.TrimSpace(string(data)))
+	}
+	return nil
 }
 
 // Commands é a resposta do endpoint /commands (polling de comandos on-demand).
@@ -118,7 +172,10 @@ type Commands struct {
 // servidor LIMPA o pendente na leitura (read-once), então um comando roda uma vez.
 func (c *Client) GetCommands(ctx context.Context) (Commands, error) {
 	var out Commands
-	data, status, err := c.request(ctx, http.MethodGet, c.commandsURL, nil, "")
+	// ack=1 avisa que este coletor confirma o comando (POST /commands/ack): o
+	// Thera só reentrega um comando sem confirmação para quem anuncia isso —
+	// coletores antigos recebem uma vez só (read-once).
+	data, status, err := c.request(ctx, http.MethodGet, c.commandsURL+"?ack=1", nil, "")
 	if err != nil {
 		return out, err
 	}

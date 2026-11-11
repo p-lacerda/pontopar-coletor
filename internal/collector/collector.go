@@ -17,12 +17,16 @@ package collector
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -54,6 +58,15 @@ const (
 // fullSyncCursorFile é o cursor SEPARADO que torna o full-sync retomável sem
 // mexer no cursor.json da coleta incremental.
 const fullSyncCursorFile = "fullsync.json"
+
+// fullSyncPeriodFile guarda o período (from/to) do refill em andamento, para o
+// "Retomar" continuar com o MESMO recorte em vez de virar um refill total.
+const fullSyncPeriodFile = "fullsync-period.json"
+
+// refillShutdownWait é quanto o coletor espera, no desligamento, um refill em
+// andamento encerrar e CONFIRMAR ao Thera (ack "failed: interrompido"). Cabe no
+// WaitHint que o serviço renova durante o StopPending.
+const refillShutdownWait = 15 * time.Second
 
 // validUnixTime valida o `time` de um access_log. Rejeita vazio, "0", negativo e
 // não-numérico — exatamente os casos que fariam o backend carimbar "agora" e
@@ -137,6 +150,16 @@ type Collector struct {
 	clockSyncEvery   time.Duration
 	lastCommandCheck time.Time
 	commandEvery     time.Duration
+
+	// wake acorda o loop antes do fim do pollSeconds ("Coletar agora").
+	wake chan struct{}
+
+	// refills rastreia os refills em goroutine: no desligamento o coletor espera
+	// eles encerrarem e confirmarem ao Thera, senão o comando ficava RUNNING.
+	refills      sync.WaitGroup
+	ctxMu        sync.Mutex
+	runCtx       context.Context
+	refillCancel context.CancelFunc
 }
 
 // New monta um coletor a partir da config e do diretório-base (onde ficam
@@ -167,9 +190,11 @@ func New(cfg *config.Config, dir string, log Logger, st *state.State, au *audit.
 		// Comandos on-demand (ex.: full-sync disparado pela web): checagem leve e
 		// frequente para o disparo responder em segundos.
 		commandEvery: 15 * time.Second,
+		wake:         make(chan struct{}, 1),
 	}
 	if st != nil {
 		st.SetEndpoints(cfg.DeviceBase(), cfg.TheraBase)
+		st.SetPoll(cfg.Poll())
 		st.SetCursor(c.cursor.Get())
 	}
 	return c
@@ -285,7 +310,18 @@ func (c *Collector) tick(ctx context.Context) error {
 	// não pode interromper a importação fiscal das batidas.
 	if c.lastSync.IsZero() || time.Since(c.lastSync) >= c.syncEvery {
 		if err := c.syncUsers(ctx); err != nil {
-			c.theraFail(err)
+			// Falha da sincronização de CADASTROS não é "Thera fora": as batidas
+			// (/dao) seguem indo. Marcar o Thera offline aqui fazia o painel e a
+			// bandeja dizerem "sem conexão com o Thera" com tudo funcionando.
+			if c.st != nil {
+				c.st.UserSyncFail(err.Error())
+			}
+			// Mas se quem falhou foi o THERA (rede, 5xx, segredo errado), ele está
+			// fora para nós — sem isso, com o relógio ocioso, ninguém perceberia.
+			var ts *theraSideError
+			if errors.As(err, &ts) {
+				c.theraFail(err)
+			}
 			c.log.Errorf("sincronização de usuários/faces falhou (batidas continuam): %v", err)
 		} else {
 			c.theraOK()
@@ -348,7 +384,7 @@ func (c *Collector) tick(ctx context.Context) error {
 func (c *Collector) syncUsers(ctx context.Context) error {
 	manifest, err := c.thera.GetSync(ctx)
 	if err != nil {
-		return err
+		return theraSide(err)
 	}
 	if manifest.DeviceID != "" && c.cfg.DeviceIdInt() != 0 && manifest.DeviceID != itoa(c.cfg.DeviceIdInt()) {
 		return fmt.Errorf("manifesto é do device %s, configurado %s", manifest.DeviceID, itoa(c.cfg.DeviceIdInt()))
@@ -384,19 +420,19 @@ func (c *Collector) syncUsers(ctx context.Context) error {
 		return err
 	}
 	if err := c.thera.PostSyncResult(ctx, syncObservations(before)); err != nil {
-		return err
+		return theraSide(err)
 	}
 	// Uma alteração observada no aparelho pode ter atualizado o Thera; recarrega
 	// o manifesto para aplicar o estado resultante no mesmo ciclo.
 	manifest, err = c.thera.GetSync(ctx)
 	if err != nil {
-		return err
+		return theraSide(err)
 	}
 	users := make([]idface.User, 0, len(manifest.Users))
 	for _, wanted := range manifest.Users {
 		image, err := c.thera.GetBinary(ctx, wanted.FaceURL)
 		if err != nil {
-			return fmt.Errorf("face matrícula %s: %w", wanted.Registration, err)
+			return theraSide(fmt.Errorf("face matrícula %s: %w", wanted.Registration, err))
 		}
 		users = append(users, idface.User{Registration: wanted.Registration, Name: wanted.Name, Enabled: wanted.Enabled, Image: image})
 	}
@@ -441,13 +477,13 @@ func (c *Collector) syncUsers(ctx context.Context) error {
 				return fmt.Errorf("ler face matrícula %s: %w", user.Registration, faceErr)
 			}
 			if faceErr = c.thera.PostFace(ctx, user.Registration, image); faceErr != nil {
-				return fmt.Errorf("enviar face matrícula %s: %w", user.Registration, faceErr)
+				return theraSide(fmt.Errorf("enviar face matrícula %s: %w", user.Registration, faceErr))
 			}
 		}
 		result = append(result, thera.SyncObservation{UserID: itoa(user.Id), Registration: user.Registration, Name: user.Name, Enabled: user.Enabled, FaceEnrolled: user.ImageRegistered})
 	}
 	if err := c.thera.PostSyncResult(ctx, result); err != nil {
-		return err
+		return theraSide(err)
 	}
 	if c.st != nil {
 		c.st.UserSync(len(result))
@@ -462,6 +498,19 @@ func syncObservations(users []idface.UserSnapshot) []thera.SyncObservation {
 		result = append(result, thera.SyncObservation{UserID: itoa(user.Id), Registration: user.Registration, Name: user.Name, Enabled: user.Enabled, FaceEnrolled: user.ImageRegistered})
 	}
 	return result
+}
+
+// theraSideError marca um erro vindo das chamadas ao Thera (não do relógio).
+type theraSideError struct{ err error }
+
+func (e *theraSideError) Error() string { return e.err.Error() }
+func (e *theraSideError) Unwrap() error { return e.err }
+
+func theraSide(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &theraSideError{err: err}
 }
 
 // sortLogsByID ordena um lote de access_logs por id ascendente; ids inválidos
@@ -557,6 +606,10 @@ func (c *Collector) drainOnce(ctx context.Context) (drainResult, int, error) {
 		}
 
 		reg := c.registrationFor(string(l.UserId))
+		if c.st != nil {
+			t, _ := validUnixTime(string(l.Time))
+			c.st.RecordPunch(state.Punch{ID: id, UserID: string(l.UserId), Registration: reg, Time: t})
+		}
 		if reg == "" {
 			reg = "-"
 		}
@@ -734,24 +787,83 @@ type FullSyncResult = audit.Record
 //
 // Só um full-sync roda por vez; enquanto roda, o tick incremental é pulado.
 func (c *Collector) FullSync(ctx context.Context, startID int64, fromUnix, toUnix int64, note string) (FullSyncResult, error) {
+	return c.Refill(ctx, RefillRequest{StartID: startID, FromUnix: fromUnix, ToUnix: toUnix, Note: note})
+}
+
+// Origens de um refill (aparecem no painel, na auditoria e no Thera).
+const (
+	SourcePanel = "painel"
+	SourceTray  = "bandeja"
+	SourceThera = "thera"
+)
+
+// RefillRequest descreve um refill (full-sync) on-demand.
+//   - StartID: 0 = desde o início do que o aparelho guarda; -1 = retomar o
+//     refill interrompido; >0 = a partir deste id.
+//   - FromUnix/ToUnix (epoch s, 0 = sem limite): só envia batidas do período.
+//   - Source: quem pediu (painel, bandeja, thera).
+//   - CommandID: comando remoto do Thera a confirmar (ack). Vazio = local.
+type RefillRequest struct {
+	StartID   int64
+	FromUnix  int64
+	ToUnix    int64
+	Note      string
+	Source    string
+	CommandID string
+}
+
+// ErrRefillRunning é devolvido quando já há um refill em andamento.
+var ErrRefillRunning = errors.New("um refill já está em andamento")
+
+// Refill executa o full-sync descrito em req (ver FullSync para a mecânica).
+func (c *Collector) Refill(ctx context.Context, req RefillRequest) (FullSyncResult, error) {
 	if !c.fullSyncRunning.CompareAndSwap(false, true) {
-		return FullSyncResult{}, errors.New("um full-sync já está em andamento")
+		return FullSyncResult{}, ErrRefillRunning
 	}
 	defer c.fullSyncRunning.Store(false)
+	return c.runRefill(ctx, req)
+}
+
+// runRefill executa o refill; o chamador já reservou fullSyncRunning.
+func (c *Collector) runRefill(ctx context.Context, req RefillRequest) (FullSyncResult, error) {
+	startID, fromUnix, toUnix, note := req.StartID, req.FromUnix, req.ToUnix, req.Note
+	if startID < 0 {
+		// Retomar: só existe se houver progresso salvo; e retoma com o período
+		// original (senão um refill "de hoje" retomado viraria o histórico todo).
+		if !c.ResumableRefill() {
+			return FullSyncResult{}, ErrNothingToResume
+		}
+		if fromUnix == 0 && toUnix == 0 {
+			fromUnix, toUnix = c.loadRefillPeriod()
+		}
+	}
+	if note == "" && req.Source != "" {
+		note = "disparado pelo " + req.Source
+		if req.Source == SourceThera {
+			note = "disparado pelo Thera"
+		} else if req.Source == SourceTray {
+			note = "disparado pela bandeja"
+		}
+	}
 
 	periodActive := fromUnix > 0 || toUnix > 0
 
 	began := time.Now()
-	if c.st != nil {
-		c.st.FullSyncStart()
+	shownStart := startID
+	if startID < 0 {
+		shownStart = c.fullCursor.Get()
 	}
+	if c.st != nil {
+		c.st.FullSyncStart(state.FullSyncInfo{Source: req.Source, StartID: shownStart, FromUnix: fromUnix, ToUnix: toUnix})
+	}
+	c.ackCommand(ctx, req.CommandID, thera.AckRunning, nil, "")
 	if periodActive {
 		c.log.Infof("full-sync iniciado (startID=%d, período %d..%d) %s", startID, fromUnix, toUnix, note)
 	} else {
 		c.log.Infof("full-sync iniciado (startID=%d) %s", startID, note)
 	}
 
-	rec := audit.Record{Mode: audit.ModeFull, Note: note}
+	rec := audit.Record{Mode: audit.ModeFull, Note: note, FromUnix: fromUnix, ToUnix: toUnix}
 
 	finish := func(r audit.Record, err error) (audit.Record, error) {
 		r.DurationMs = time.Since(began).Milliseconds()
@@ -762,6 +874,7 @@ func (c *Collector) FullSync(ctx context.Context, startID int64, fromUnix, toUni
 			r.Mode = audit.ModeFullPartial
 			r.Err = "interrompido (retomável)"
 		}
+		r.Time = time.Now().UTC()
 		c.writeAudit(r)
 		if c.st != nil {
 			c.st.Forwarded(r.Forwarded)
@@ -770,8 +883,21 @@ func (c *Collector) FullSync(ctx context.Context, startID int64, fromUnix, toUni
 			if r.Err != "" {
 				summary = "ERRO: " + r.Err + " · " + summary
 			}
-			c.st.FullSyncDone(summary)
+			c.st.FullSyncDone(summary, r)
 		}
+		// O ack final usa um contexto próprio: mesmo num shutdown (ctx cancelado)
+		// o Thera fica sabendo que o refill parou e pode ser retomado.
+		ackCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		status := thera.AckDone
+		if r.Err != "" {
+			status = thera.AckFailed
+		}
+		c.ackCommand(ackCtx, req.CommandID, status, &thera.CommandResult{
+			FromID: r.FromID, ToID: r.ToID, Read: r.Read, Forwarded: r.Forwarded,
+			SkippedNoTime: r.SkippedNoTime, SkippedBadID: r.SkippedBadID, NoRegistration: r.NoRegistration,
+			RotatedGap: r.RotatedGap, DeviceMinID: r.DeviceMinID, Verified: r.Verified, DurationMs: r.DurationMs,
+		}, r.Err)
+		cancel()
 		c.log.Infof("full-sync concluído: ids %d→%d, %d enviadas, %d sem time, %d id inválido, verif=%v, dur=%dms",
 			r.FromID, r.ToID, r.Forwarded, r.SkippedNoTime, r.SkippedBadID, r.Verified, r.DurationMs)
 		return r, err
@@ -788,6 +914,7 @@ func (c *Collector) FullSync(ctx context.Context, startID int64, fromUnix, toUni
 	if startID >= 0 {
 		cursor = startID
 		_ = c.fullCursor.Set(cursor)
+		c.saveRefillPeriod(fromUnix, toUnix)
 	} else {
 		cursor = c.fullCursor.Get()
 	}
@@ -929,13 +1056,22 @@ func (c *Collector) FullSync(ctx context.Context, startID int64, fromUnix, toUni
 
 			// Dentro do período: acumula no lote (mesmo aparelho → mesmo envelope).
 			envDeviceId = c.envDeviceIdFor(l)
-			buf = append(buf, pend{id: id, ch: c.buildChange(l)})
+			ch := c.buildChange(l)
+			if ch.Values.Registration == "" {
+				rec.NoRegistration++
+			}
+			buf = append(buf, pend{id: id, ch: ch})
 			progressed = true
 			if len(buf) >= batchMax {
 				if err := flush(); err != nil {
 					return finish(rec, err)
 				}
 			}
+		}
+		// Progresso por PÁGINA LIDA (não só por lote enviado): num refill por data,
+		// as páginas fora do período não enviam nada e a barra ficava parada.
+		if c.st != nil {
+			c.st.FullSyncProgress(readPos, int64(rec.Forwarded), int64(rec.Read))
 		}
 		// Guard anti-loop-infinito: página inteira só de ids inválidos.
 		if !progressed {
@@ -961,11 +1097,15 @@ func (c *Collector) FullSync(ctx context.Context, startID int64, fromUnix, toUni
 			}
 		}
 	}
-	// Full-sync concluído: zera o cursor retomável.
+	// Full-sync concluído: zera o cursor retomável (e o período salvo).
 	_ = c.fullCursor.Clear()
+	_ = os.Remove(filepath.Join(c.dir, fullSyncPeriodFile))
 
 	if periodActive && outOfPeriod > 0 {
 		c.log.Infof("full-sync período: %d batida(s) fora do intervalo ignoradas", outOfPeriod)
+	}
+	if rec.NoRegistration > 0 {
+		c.log.Errorf("refill: %d batida(s) enviadas SEM matrícula no aparelho — o Thera só as aceita se houver mapa user_id→colaborador; confira o cadastro no Control iD", rec.NoRegistration)
 	}
 
 	return finish(rec, nil)
@@ -974,11 +1114,127 @@ func (c *Collector) FullSync(ctx context.Context, startID int64, fromUnix, toUni
 // FullSyncRunning diz se um full-sync está em andamento.
 func (c *Collector) FullSyncRunning() bool { return c.fullSyncRunning.Load() }
 
+// ErrNothingToResume: pediram "retomar" sem refill interrompido salvo.
+var ErrNothingToResume = errors.New("não há refill interrompido para retomar")
+
+// ResumableRefill diz se há um refill interrompido com progresso salvo.
+func (c *Collector) ResumableRefill() bool {
+	_, err := os.Stat(filepath.Join(c.dir, fullSyncCursorFile))
+	return err == nil
+}
+
+type refillPeriod struct {
+	FromUnix int64 `json:"fromUnix"`
+	ToUnix   int64 `json:"toUnix"`
+}
+
+func (c *Collector) saveRefillPeriod(fromUnix, toUnix int64) {
+	data, _ := json.Marshal(refillPeriod{FromUnix: fromUnix, ToUnix: toUnix})
+	_ = os.WriteFile(filepath.Join(c.dir, fullSyncPeriodFile), data, 0o644)
+}
+
+func (c *Collector) loadRefillPeriod() (int64, int64) {
+	data, err := os.ReadFile(filepath.Join(c.dir, fullSyncPeriodFile))
+	if err != nil {
+		return 0, 0
+	}
+	var p refillPeriod
+	if json.Unmarshal(data, &p) != nil {
+		return 0, 0
+	}
+	return p.FromUnix, p.ToUnix
+}
+
+// StartRefill dispara um refill em segundo plano, preso ao ciclo de vida do
+// coletor (o desligamento espera ele encerrar e confirmar). Devolve na hora o
+// erro de "já está rodando" ou "nada para retomar".
+func (c *Collector) StartRefill(req RefillRequest) error {
+	if req.StartID < 0 && !c.ResumableRefill() {
+		return ErrNothingToResume
+	}
+	c.ctxMu.Lock()
+	ctx := c.runCtx
+	c.ctxMu.Unlock()
+	if ctx == nil || ctx.Err() != nil {
+		// Coletor ainda não começou ou já está saindo (recarga da config): o
+		// pedido iria para um coletor morto e viraria "interrompido" à toa.
+		return ErrCollectorRestarting
+	}
+	return c.goRefill(ctx, req)
+}
+
+// ErrCollectorRestarting: o coletor está reiniciando (recarga) — tente de novo.
+var ErrCollectorRestarting = errors.New("o coletor está reiniciando; tente de novo em alguns segundos")
+
+// goRefill RESERVA o refill na hora (sem corrida entre dois pedidos) e o roda em
+// segundo plano, rastreado para o desligamento esperar e confirmar ao Thera.
+func (c *Collector) goRefill(ctx context.Context, req RefillRequest) error {
+	if !c.fullSyncRunning.CompareAndSwap(false, true) {
+		return ErrRefillRunning
+	}
+	// Timeout generoso: um histórico grande pode levar dezenas de minutos.
+	rctx, cancel := context.WithTimeout(ctx, 90*time.Minute)
+	c.ctxMu.Lock()
+	c.refillCancel = cancel
+	c.ctxMu.Unlock()
+	c.refills.Add(1)
+	go func() {
+		defer c.refills.Done()
+		defer cancel()
+		defer c.fullSyncRunning.Store(false)
+		if _, err := c.runRefill(rctx, req); err != nil && !errors.Is(err, context.Canceled) {
+			c.log.Errorf("refill (%s) terminou com erro: %v", orDefault(req.Source, "painel"), err)
+		}
+	}()
+	return nil
+}
+
+// CancelRefill interrompe o refill em andamento (fica retomável e o Thera é
+// avisado). Sem refill rodando, não faz nada.
+func (c *Collector) CancelRefill() bool {
+	if !c.fullSyncRunning.Load() {
+		return false
+	}
+	c.ctxMu.Lock()
+	cancel := c.refillCancel
+	c.ctxMu.Unlock()
+	if cancel == nil {
+		return false
+	}
+	c.log.Infof("refill interrompido a pedido (fica retomável)")
+	cancel()
+	return true
+}
+
+func orDefault(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}
+
+// waitRefills espera os refills em andamento encerrarem (até timeout).
+func (c *Collector) waitRefills(timeout time.Duration) {
+	done := make(chan struct{})
+	go func() { c.refills.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		c.log.Errorf("refill não encerrou em %s no desligamento; o progresso fica salvo para retomar", timeout)
+	}
+}
+
 // Run roda o loop principal até o contexto ser cancelado (shutdown limpo do
 // serviço). Entre ticks, dorme pollSeconds respeitando ctx.Done(). Se um
 // UpdateHook estiver configurado, checa novas versões nos intervalos
 // definidos, sempre num ponto seguro do ciclo (fora de um forward em voo).
 func (c *Collector) Run(ctx context.Context) {
+	c.ctxMu.Lock()
+	c.runCtx = ctx
+	c.ctxMu.Unlock()
+	// Ao sair (desligamento, recarga, update), espera o refill em andamento
+	// encerrar e confirmar ao Thera — o ctx dele deriva deste e já foi cancelado.
+	defer c.waitRefills(refillShutdownWait)
 	c.log.Infof("Coletor PontoPar iniciado · aparelho=%s · thera=%s · poll=%ds · lote=%d",
 		c.cfg.DeviceBase(), c.cfg.TheraBase, c.cfg.Poll(), c.batchSize)
 
@@ -1009,7 +1265,8 @@ func (c *Collector) Run(ctx context.Context) {
 		c.maybeRunQueuedFullSync(ctx)
 
 		// Ponto seguro: sem batida em voo. Checa update se estiver na hora.
-		if c.updater != nil && c.updateEvery > 0 && !nextUpdateCheck.IsZero() && time.Now().After(nextUpdateCheck) {
+		// Nunca durante um refill: o restart do update mataria o refill no meio.
+		if c.updater != nil && c.updateEvery > 0 && !nextUpdateCheck.IsZero() && time.Now().After(nextUpdateCheck) && !c.fullSyncRunning.Load() {
 			nextUpdateCheck = time.Now().Add(c.updateEvery)
 			if c.checkUpdate(ctx) {
 				// Update aplicado: o loop encerra e o onUpdated decide o restart.
@@ -1025,8 +1282,52 @@ func (c *Collector) Run(ctx context.Context) {
 			}
 			return
 		case <-time.After(poll):
+		case <-c.wake:
+			c.log.Infof("coleta imediata solicitada")
 		}
 	}
+}
+
+// CollectNow acorda o loop para coletar já, sem esperar o pollSeconds. Não
+// bloqueia; pedidos repetidos enquanto um está pendente são agregados.
+func (c *Collector) CollectNow() {
+	if c.st != nil {
+		c.st.CollectNowRequested()
+	}
+	select {
+	case c.wake <- struct{}{}:
+	default:
+	}
+}
+
+// ackCommand confirma um comando remoto ao Thera (no-op sem commandID). O ack
+// FINAL (done/failed) é retentado com backoff: perder ele fazia o Thera achar
+// que o coletor reiniciou no meio, mesmo com o refill concluído.
+func (c *Collector) ackCommand(ctx context.Context, commandID, status string, result *thera.CommandResult, errMsg string) {
+	if commandID == "" {
+		return
+	}
+	attempts := 1
+	if status != thera.AckRunning {
+		attempts = 5
+	}
+	wait := time.Second
+	var err error
+	for i := 0; i < attempts; i++ {
+		if err = c.thera.AckCommand(ctx, commandID, status, result, errMsg); err == nil {
+			return
+		}
+		if i == attempts-1 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			i = attempts
+		case <-time.After(wait):
+			wait *= 2
+		}
+	}
+	c.log.Errorf("não consegui confirmar o comando %s ao Thera (%s): %v", commandID, status, err)
 }
 
 // maybeRunQueuedFullSync consulta o Thera por comandos on-demand (full-sync
@@ -1056,16 +1357,20 @@ func (c *Collector) maybeRunQueuedFullSync(ctx context.Context) {
 	if fs == nil {
 		return
 	}
-	note := "disparado pela web"
+	note := "disparado pelo Thera"
 	if fs.FromUnix > 0 || fs.ToUnix > 0 {
-		note = "disparado pela web (período)"
+		note = "disparado pelo Thera (período)"
 	}
-	c.log.Infof("comando do Thera: full-sync (startId=%d, período %d..%d) — iniciando", fs.StartID, fs.FromUnix, fs.ToUnix)
-	go func() {
-		if _, err := c.FullSync(ctx, fs.StartID, fs.FromUnix, fs.ToUnix, note); err != nil {
-			c.log.Errorf("full-sync (disparado pela web) terminou com erro: %v", err)
-		}
-	}()
+	c.log.Infof("comando do Thera: refill (startId=%d, período %d..%d, comando=%s) — iniciando", fs.StartID, fs.FromUnix, fs.ToUnix, fs.CommandID)
+	req := RefillRequest{StartID: fs.StartID, FromUnix: fs.FromUnix, ToUnix: fs.ToUnix, Note: note, Source: SourceThera, CommandID: fs.CommandID}
+	if fs.StartID < 0 && !c.ResumableRefill() {
+		// Pediram retomar mas não há o que retomar aqui: faz o refill do início
+		// (com o período pedido), que é o que o RH quer de fato.
+		req.StartID = 0
+	}
+	if err := c.goRefill(ctx, req); err != nil {
+		c.log.Errorf("refill pedido pelo Thera não iniciou: %v", err)
+	}
 }
 
 // checkUpdate roda a checagem de auto-update (best-effort). Devolve true se um

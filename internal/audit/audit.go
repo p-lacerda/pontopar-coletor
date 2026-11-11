@@ -79,6 +79,14 @@ type Record struct {
 	Err string `json:"error,omitempty"`
 	// Note é um texto livre opcional (ex.: "disparado pelo painel").
 	Note string `json:"note,omitempty"`
+	// NoRegistration é quantas batidas enviadas não tinham matrícula resolvida
+	// no aparelho. O Thera só aceita essas se houver um mapa user_id→colaborador
+	// curado; sem ele, descarta ("Sem colaborador para user_id=…"). É o primeiro
+	// lugar para olhar quando um refill "enviou mas não apareceu no cartão".
+	NoRegistration int `json:"noRegistration,omitempty"`
+	// FromUnix/ToUnix (epoch s) registram o período pedido num refill (0 = sem limite).
+	FromUnix int64 `json:"fromUnix,omitempty"`
+	ToUnix   int64 `json:"toUnix,omitempty"`
 }
 
 // fileName é o nome do arquivo de auditoria, ao lado do executável.
@@ -209,6 +217,7 @@ func ExportCSV(w io.Writer, records []Record) error {
 	header := []string{
 		"time", "mode", "fromId", "toId", "deviceMinId", "read", "forwarded",
 		"skippedNoTime", "skippedBadId", "rotatedGap", "verified", "durationMs", "error", "note",
+		"noRegistration",
 	}
 	if err := cw.Write(header); err != nil {
 		return err
@@ -229,6 +238,7 @@ func ExportCSV(w io.Writer, records []Record) error {
 			strconv.FormatInt(r.DurationMs, 10),
 			r.Err,
 			r.Note,
+			strconv.Itoa(r.NoRegistration),
 		}
 		if err := cw.Write(row); err != nil {
 			return err

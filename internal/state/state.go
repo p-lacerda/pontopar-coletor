@@ -1,11 +1,12 @@
 // Package state mantém o ESTADO VIVO do coletor (status de conexão, cursor,
-// contadores, última sync, progresso do full-sync) num objeto seguro para uso
-// concorrente. A interface gráfica e o painel web leem um Snapshot imutável; o
-// coletor atualiza os campos conforme opera.
+// contadores, última sync, progresso do refill) num objeto seguro para uso
+// concorrente. O painel e a bandeja leem um Snapshot imutável; o coletor
+// atualiza os campos conforme opera.
 //
-// O estado também é persistido (throttle) em state.json ao lado do executável,
-// para diagnóstico e para que um processo separado (a janela walk) possa mostrar
-// o status mesmo sem falar com o serviço.
+// O estado também é persistido (throttle) em state.json ao lado do executável:
+// serve para diagnóstico e para o painel não "zerar" depois de um reinício do
+// Windows (batidas de hoje, últimas batidas e o resultado do último refill são
+// restaurados no arranque).
 package state
 
 import (
@@ -14,7 +15,21 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/p-lacerda/pontopar-coletor/internal/audit"
 )
+
+// recentMax é quantas batidas recentes o painel mostra no feed.
+const recentMax = 25
+
+// Punch é uma batida encaminhada ao Thera, para o feed "últimas batidas".
+type Punch struct {
+	ID           int64     `json:"id"`
+	UserID       string    `json:"userId"`
+	Registration string    `json:"registration,omitempty"`
+	Time         int64     `json:"time"` // epoch (s) do evento NO APARELHO
+	SentAt       time.Time `json:"sentAt"`
+}
 
 // Snapshot é uma cópia imutável do estado, segura para serializar/enviar à UI.
 type Snapshot struct {
@@ -45,18 +60,40 @@ type Snapshot struct {
 	LastError      string    `json:"lastError,omitempty"`
 	LastErrorAt    time.Time `json:"lastErrorAt,omitempty"`
 
-	// Sincronização de usuários/faces (manifesto do Thera).
-	LastUserSyncAt time.Time `json:"lastUserSyncAt,omitempty"`
-	UsersObserved  int       `json:"usersObserved"`
+	// Batidas do dia (data LOCAL do evento) recebidas em tempo real, e o feed
+	// das últimas batidas encaminhadas.
+	TodayDate      string    `json:"todayDate"`
+	ForwardedToday int64     `json:"forwardedToday"`
+	NoRegistration int64     `json:"noRegistration"` // enviadas sem matrícula (o Thera pode descartar)
+	RecentPunches  []Punch   `json:"recentPunches"`
+	PollSeconds    int       `json:"pollSeconds"`
+	CollectNowAt   time.Time `json:"collectNowAt,omitempty"`
 
-	// Progresso do full-sync on-demand.
-	FullSyncRunning    bool      `json:"fullSyncRunning"`
-	FullSyncStartedAt  time.Time `json:"fullSyncStartedAt,omitempty"`
-	FullSyncCurrentID  int64     `json:"fullSyncCurrentId"`
-	FullSyncForwarded  int64     `json:"fullSyncForwarded"`
-	FullSyncReadTotal  int64     `json:"fullSyncReadTotal"`
-	FullSyncLastResult string    `json:"fullSyncLastResult,omitempty"`
-	FullSyncLastAt     time.Time `json:"fullSyncLastAt,omitempty"`
+	// Sincronização de usuários/faces (manifesto do Thera).
+	LastUserSyncAt  time.Time `json:"lastUserSyncAt,omitempty"`
+	UsersObserved   int       `json:"usersObserved"`
+	UserSyncError   string    `json:"userSyncError,omitempty"`
+	UserSyncErrorAt time.Time `json:"userSyncErrorAt,omitempty"`
+
+	// Refill (full-sync) on-demand.
+	FullSyncRunning    bool          `json:"fullSyncRunning"`
+	FullSyncStartedAt  time.Time     `json:"fullSyncStartedAt,omitempty"`
+	FullSyncSource     string        `json:"fullSyncSource,omitempty"` // painel | bandeja | thera
+	FullSyncFromUnix   int64         `json:"fullSyncFromUnix,omitempty"`
+	FullSyncToUnix     int64         `json:"fullSyncToUnix,omitempty"`
+	FullSyncStartID    int64         `json:"fullSyncStartId"`
+	FullSyncTargetID   int64         `json:"fullSyncTargetId"` // estimativa do fim (maior id visto)
+	FullSyncCurrentID  int64         `json:"fullSyncCurrentId"`
+	FullSyncForwarded  int64         `json:"fullSyncForwarded"`
+	FullSyncReadTotal  int64         `json:"fullSyncReadTotal"`
+	FullSyncLastResult string        `json:"fullSyncLastResult,omitempty"`
+	FullSyncLastAt     time.Time     `json:"fullSyncLastAt,omitempty"`
+	FullSyncLast       *audit.Record `json:"fullSyncLast,omitempty"`
+	// RefillResumable: há um refill interrompido com progresso salvo (o
+	// supervisor preenche na leitura; não é persistido).
+	RefillResumable bool `json:"refillResumable"`
+	// ReloadPending: config salva, aplicada quando o refill terminar.
+	ReloadPending bool `json:"reloadPending"`
 }
 
 // State é o estado mutável protegido por mutex.
@@ -67,23 +104,63 @@ type State struct {
 	path         string
 	lastPersist  time.Time
 	persistEvery time.Duration
+	now          func() time.Time
 }
 
-// New cria o estado. dir é onde state.json será gravado.
+// New cria o estado. dir é onde state.json será gravado. Se já existir um
+// state.json (reinício do serviço/Windows), restaura o que faz sentido manter:
+// batidas de hoje (se ainda for o mesmo dia), últimas batidas, último refill.
 func New(dir, version string) *State {
-	return &State{
+	s := &State{
 		snap:         Snapshot{Version: version, StartedAt: time.Now()},
 		path:         filepath.Join(dir, "state.json"),
 		persistEvery: 3 * time.Second,
+		now:          time.Now,
 	}
+	s.restore()
+	return s
 }
 
-// Get devolve um Snapshot atual (com Now preenchido).
+func (s *State) restore() {
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		return
+	}
+	var old Snapshot
+	if json.Unmarshal(data, &old) != nil {
+		return
+	}
+	if old.TodayDate == s.today() {
+		s.snap.TodayDate = old.TodayDate
+		s.snap.ForwardedToday = old.ForwardedToday
+	}
+	if len(old.RecentPunches) > recentMax {
+		old.RecentPunches = old.RecentPunches[:recentMax]
+	}
+	s.snap.RecentPunches = old.RecentPunches
+	s.snap.LastSyncAt = old.LastSyncAt
+	s.snap.MaxDeviceID = old.MaxDeviceID
+	s.snap.FullSyncLastResult = old.FullSyncLastResult
+	s.snap.FullSyncLastAt = old.FullSyncLastAt
+	s.snap.FullSyncLast = old.FullSyncLast
+	s.snap.LastUserSyncAt = old.LastUserSyncAt
+	s.snap.UsersObserved = old.UsersObserved
+}
+
+func (s *State) today() string { return s.now().Format("2006-01-02") }
+
+// Get devolve um Snapshot atual (com Now preenchido). Vira o dia sozinho: se a
+// data mudou desde a última batida, "batidas hoje" aparece zerado.
 func (s *State) Get() Snapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	snap := s.snap
-	snap.Now = time.Now()
+	snap.Now = s.now()
+	if snap.TodayDate != s.today() {
+		snap.TodayDate = s.today()
+		snap.ForwardedToday = 0
+	}
+	snap.RecentPunches = append([]Punch(nil), s.snap.RecentPunches...)
 	return snap
 }
 
@@ -142,6 +219,11 @@ func (s *State) SetEndpoints(deviceBase, theraBase string) {
 	s.mutate(func(snap *Snapshot) { snap.DeviceBase = deviceBase; snap.TheraBase = theraBase })
 }
 
+// SetPoll informa o intervalo de coleta (o painel mostra "próxima coleta em").
+func (s *State) SetPoll(seconds int) {
+	s.mutate(func(snap *Snapshot) { snap.PollSeconds = seconds })
+}
+
 func (s *State) DeviceOK() {
 	s.mutate(func(snap *Snapshot) {
 		snap.DeviceOnline = true
@@ -166,6 +248,11 @@ func (s *State) Tick() {
 	s.mutate(func(snap *Snapshot) { snap.LastTickAt = time.Now() })
 }
 
+// CollectNowRequested marca um pedido de coleta imediata (feedback no painel).
+func (s *State) CollectNowRequested() {
+	s.mutate(func(snap *Snapshot) { snap.CollectNowAt = time.Now() })
+}
+
 func (s *State) SetCursor(cursor int64) {
 	s.mutate(func(snap *Snapshot) {
 		snap.Cursor = cursor
@@ -183,7 +270,7 @@ func (s *State) SeenDeviceID(id int64) {
 	})
 }
 
-// Forwarded registra uma batida enviada e aceita (incrementa totais e marca sync).
+// Forwarded registra batidas enviadas e aceitas (incrementa totais e marca sync).
 func (s *State) Forwarded(n int) {
 	if n <= 0 {
 		return
@@ -192,6 +279,44 @@ func (s *State) Forwarded(n int) {
 		snap.ForwardedTotal += int64(n)
 		snap.LastSyncAt = time.Now()
 	})
+}
+
+// RecordPunch registra UMA batida encaminhada em tempo real: entra no feed e,
+// se o evento é de hoje (data local), conta em "batidas hoje".
+func (s *State) RecordPunch(p Punch) {
+	today := s.today()
+	s.mutate(func(snap *Snapshot) {
+		if snap.TodayDate != today {
+			snap.TodayDate = today
+			snap.ForwardedToday = 0
+		}
+		if p.Time > 0 && time.Unix(normalizeEpoch(p.Time), 0).In(time.Local).Format("2006-01-02") == today {
+			snap.ForwardedToday++
+		}
+		if p.Registration == "" {
+			snap.NoRegistration++
+		}
+		if p.SentAt.IsZero() {
+			p.SentAt = time.Now()
+		}
+		recent := make([]Punch, 0, recentMax)
+		recent = append(recent, p)
+		for _, old := range snap.RecentPunches {
+			if len(recent) >= recentMax {
+				break
+			}
+			recent = append(recent, old)
+		}
+		snap.RecentPunches = recent
+	})
+}
+
+// normalizeEpoch aceita epoch em segundos ou milissegundos.
+func normalizeEpoch(n int64) int64 {
+	if n > 1_000_000_000_000 {
+		return n / 1000
+	}
+	return n
 }
 
 func (s *State) SkippedNoTime(n int) {
@@ -206,16 +331,45 @@ func (s *State) RecordError(err string) {
 }
 
 func (s *State) UserSync(observed int) {
-	s.mutate(func(snap *Snapshot) { snap.LastUserSyncAt = time.Now(); snap.UsersObserved = observed })
+	s.mutate(func(snap *Snapshot) {
+		snap.LastUserSyncAt = time.Now()
+		snap.UsersObserved = observed
+		snap.UserSyncError = ""
+	})
 }
 
-// --- Full-sync ---
+// UserSyncFail registra a falha da sincronização de cadastros/faces (as batidas
+// continuam indo; não é "Thera fora").
+func (s *State) UserSyncFail(err string) {
+	s.mutate(func(snap *Snapshot) { snap.UserSyncError = err; snap.UserSyncErrorAt = time.Now() })
+}
 
-func (s *State) FullSyncStart() {
+// --- Refill (full-sync) ---
+
+// FullSyncInfo descreve o refill que está começando.
+type FullSyncInfo struct {
+	Source   string
+	StartID  int64
+	FromUnix int64
+	ToUnix   int64
+}
+
+// FullSyncStart marca o início de um refill. A estimativa de fim (TargetID) é
+// o maior id já visto no aparelho — o painel usa isso para a barra de progresso.
+func (s *State) FullSyncStart(info ...FullSyncInfo) {
+	var in FullSyncInfo
+	if len(info) > 0 {
+		in = info[0]
+	}
 	s.mutate(func(snap *Snapshot) {
 		snap.FullSyncRunning = true
 		snap.FullSyncStartedAt = time.Now()
-		snap.FullSyncCurrentID = 0
+		snap.FullSyncSource = in.Source
+		snap.FullSyncStartID = in.StartID
+		snap.FullSyncFromUnix = in.FromUnix
+		snap.FullSyncToUnix = in.ToUnix
+		snap.FullSyncTargetID = snap.MaxDeviceID
+		snap.FullSyncCurrentID = in.StartID
 		snap.FullSyncForwarded = 0
 		snap.FullSyncReadTotal = 0
 		snap.FullSyncLastResult = ""
@@ -231,14 +385,22 @@ func (s *State) FullSyncProgress(currentID, forwarded, read int64) {
 		if currentID > snap.MaxDeviceID {
 			snap.MaxDeviceID = currentID
 		}
+		if currentID > snap.FullSyncTargetID {
+			snap.FullSyncTargetID = currentID
+		}
 	})
 }
 
-func (s *State) FullSyncDone(result string) {
+// FullSyncDone encerra o refill com um resumo legível e o record completo.
+func (s *State) FullSyncDone(result string, rec ...audit.Record) {
 	s.mutate(func(snap *Snapshot) {
 		snap.FullSyncRunning = false
 		snap.FullSyncLastResult = result
 		snap.FullSyncLastAt = time.Now()
+		if len(rec) > 0 {
+			r := rec[0]
+			snap.FullSyncLast = &r
+		}
 	})
 	s.Flush()
 }

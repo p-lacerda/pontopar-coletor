@@ -28,23 +28,39 @@ OutputDir=..\dist
 OutputBaseFilename={#SetupOutputBase}
 Compression=lzma2
 SolidCompression=yes
+SetupIconFile=pontopar.ico
 UninstallDisplayIcon={app}\pontopar-coletor.exe
+UninstallDisplayName=PontoPar Coletor
 
 [Files]
 Source: "{#SourceExe}"; DestDir: "{app}"; DestName: "pontopar-coletor.exe"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\PontoPar Coletor"; Filename: "{app}\pontopar-coletor.exe"; WorkingDir: "{app}"
-Name: "{autodesktop}\PontoPar Coletor"; Filename: "{app}\pontopar-coletor.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autoprograms}\PontoPar Coletor"; Filename: "{app}\pontopar-coletor.exe"; WorkingDir: "{app}"; Comment: "Painel e status do coletor de ponto"
+Name: "{autodesktop}\PontoPar Coletor"; Filename: "{app}\pontopar-coletor.exe"; WorkingDir: "{app}"; Comment: "Painel e status do coletor de ponto"; Tasks: desktopicon
+
+[Registry]
+; O app da bandeja abre no logon de qualquer usuário (o install-start também grava
+; isto; aqui garantimos a remoção na desinstalação mesmo se algo falhar).
+Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "PontoParColetor"; ValueData: """{app}\pontopar-coletor.exe"" tray"; Flags: uninsdeletevalue
 
 [Tasks]
 Name: "desktopicon"; Description: "Criar atalho na Área de Trabalho"; GroupDescription: "Atalhos:"; Flags: checkedonce
 
 [Run]
-Filename: "{app}\pontopar-coletor.exe"; Parameters: "install-start"; StatusMsg: "Instalando e iniciando o serviço PontoPar..."; Flags: runhidden waituntilterminated
-Filename: "{app}\pontopar-coletor.exe"; Description: "Abrir PontoPar Coletor"; Flags: nowait postinstall skipifsilent
+; install-start: aplica a configuração do assistente (sem apagar o resto), cria
+; ou REPARA o serviço (auto-start, recovery, permissões), registra o app da
+; bandeja no logon e inicia. Se falhar, mostra o erro (não fica mais calado).
+Filename: "{app}\pontopar-coletor.exe"; Parameters: "install-start"; StatusMsg: "Instalando e iniciando o coletor PontoPar..."; Flags: runhidden waituntilterminated
+; Abre o app como o usuário (não como admin): ícone na bandeja + painel.
+Filename: "{app}\pontopar-coletor.exe"; Description: "Abrir o PontoPar Coletor agora"; Flags: nowait postinstall skipifsilent runasoriginaluser
+Filename: "{app}\pontopar-coletor.exe"; Parameters: "tray"; Flags: nowait runasoriginaluser; Check: WizardSilent
 
 [UninstallRun]
+; Primeiro fecha o app da bandeja (só nas sessões de usuário: o filtro SESSION ne 0
+; poupa o serviço, que para com flush logo abaixo) — senão o watchdog dele religaria
+; o serviço no meio da desinstalação.
+Filename: "{sys}\taskkill.exe"; Parameters: "/F /FI ""SESSION ne 0"" /IM pontopar-coletor.exe"; Flags: runhidden waituntilterminated; RunOnceId: "CloseTray"
 Filename: "{app}\pontopar-coletor.exe"; Parameters: "stop"; Flags: runhidden waituntilterminated; RunOnceId: "StopService"
 Filename: "{app}\pontopar-coletor.exe"; Parameters: "uninstall"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveService"
 
@@ -201,6 +217,11 @@ var
 begin
   Result := '';
   CurrentExe := ExpandConstant('{app}\pontopar-coletor.exe');
+  { 1) Fecha o app da bandeja de todos os usuários (SESSION ne 0 poupa o serviço,
+       que roda na sessão 0). Tem de vir ANTES do stop: com a bandeja aberta, o
+       watchdog dela religaria o serviço com o exe antigo e travaria o arquivo. }
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /FI "SESSION ne 0" /IM pontopar-coletor.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  { 2) Para a coleta com flush (cursor e estado gravados). Ela volta no fim. }
   if FileExists(CurrentExe) then
     Exec(CurrentExe, 'stop', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
@@ -224,14 +245,12 @@ begin
       '    "livenessMode": ' + BoolJson(FacialPage.Values[1]) + ',' + #13#10 +
       '    "limitDisplayRegion": ' + BoolJson(FacialPage.Values[2]) + ',' + #13#10 +
       '    "enablePhotoUpload": ' + BoolJson(FacialPage.Values[3]) + #13#10 +
-      '  },' + #13#10 +
-      '  "update": {' + #13#10 +
-      '    "repo": "p-lacerda/pontopar-coletor",' + #13#10 +
-      '    "checkHours": 6,' + #13#10 +
-      '    "token": ""' + #13#10 +
       '  }' + #13#10 +
       '}' + #13#10;
-    if not SaveStringToFile(ExpandConstant('{app}\config.json'), ConfigText, False) then
+    { Grava SÓ os campos do assistente. O coletor mescla isto sobre o config.json
+      existente (install-start), preservando matrícula manual, token do
+      auto-update, lotes e painel — antes, reinstalar apagava tudo isso. }
+    if not SaveStringToFile(ExpandConstant('{app}\install-config.json'), ConfigText, False) then
       RaiseException('Não foi possível salvar a configuração do PontoPar.');
   end;
 end;
