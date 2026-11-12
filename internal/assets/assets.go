@@ -52,3 +52,9 @@ func GlyphForSize(px int) []byte {
 
 // Decode decodifica um dos PNGs embutidos.
 func Decode(b []byte) (image.Image, error) { return png.Decode(bytes.NewReader(b)) }
+
+// TheraMais256 é o "T" da TheraMais (sem fundo), mostrado no painel como
+// "uma solução TheraMais". Extraído de thera-saude/apps/mobile/assets/icon.png.
+//
+//go:embed theramais-256.png
+var TheraMais256 []byte

@@ -137,6 +137,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/logo.png", s.asset(assets.Glyph256))
+	mux.HandleFunc("/theramais.png", s.asset(assets.TheraMais256))
 	mux.HandleFunc("/favicon.png", s.asset(assets.Glyph64))
 	mux.HandleFunc("/favicon.ico", s.asset(assets.Glyph32))
 	mux.HandleFunc("/api/status", s.wrap(s.handleStatus))

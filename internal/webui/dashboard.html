@@ -85,7 +85,14 @@
   .nav a:hover{background:rgba(255,255,255,.06);color:var(--side-text)}
   .nav a.active{background:rgba(255,255,255,.11);color:#fff;box-shadow:inset 0 0 0 1px rgba(255,255,255,.06)}
   .nav a .tag{margin-left:auto;font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:20px;background:var(--coral);color:#fff}
-  .side-foot{margin-top:auto;border-top:1px solid var(--side-line);padding:14px 10px 0;display:grid;gap:10px;font-size:12.5px}
+  .powered{margin:auto 0 14px;display:flex;align-items:center;gap:11px;padding:11px 12px;border-radius:14px;text-decoration:none;
+    background:linear-gradient(135deg,rgba(255,255,255,.10),rgba(255,255,255,.04));border:1px solid var(--side-line)}
+  .powered-mark{flex:none;width:38px;height:38px;border-radius:11px;background:#fff;display:grid;place-items:center;
+    box-shadow:0 6px 16px -6px rgba(0,0,0,.55)}
+  .powered-mark img{width:26px;height:26px}
+  .powered small{display:block;font-size:11px;color:var(--side-muted);letter-spacing:.2px}
+  .powered b{display:block;font-size:15px;color:#fff;letter-spacing:.2px}
+  .side-foot{border-top:1px solid var(--side-line);padding:14px 10px 0;display:grid;gap:10px;font-size:12.5px}
   .side-row{display:flex;align-items:center;gap:8px;color:var(--side-muted)}
   .side-row b{color:var(--side-text);font-weight:600}
   .theme-btn{display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,.06);border:1px solid var(--side-line);
@@ -325,6 +332,7 @@
   @media (max-width: 900px){
     .app{grid-template-columns:1fr} aside{position:static;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center;padding:12px 14px;gap:10px}
     .brand{padding:0 6px 0 0} .nav{flex-direction:row;flex-wrap:wrap} .side-foot{display:none}
+    .powered{margin:0 0 0 auto;padding:6px 10px 6px 6px} .powered-mark{width:30px;height:30px;border-radius:9px} .powered-mark img{width:20px;height:20px}
     main{padding:20px 16px 90px} .g3,.tiles{grid-template-columns:1fr} .form-sec{grid-template-columns:1fr;gap:14px} .fields,.fields.c3{grid-template-columns:1fr}
     .savebar{left:50%} .hero{flex-wrap:wrap}
   }
@@ -375,6 +383,10 @@
       <a href="#config" data-view="config"><svg class="ic"><use href="#i-sliders"/></svg>Configurações<span class="tag" id="navCfgTag" hidden>!</span></a>
       <a href="#logs" data-view="logs"><svg class="ic"><use href="#i-list"/></svg>Registros</a>
     </nav>
+    <div class="powered" title="PontoPar é uma solução TheraMais">
+      <span class="powered-mark"><img src="/theramais.png" alt="TheraMais"></span>
+      <span><small>uma solução</small><b>TheraMais</b></span>
+    </div>
     <div class="side-foot">
       <div class="side-row"><span class="dot" id="sideDot" style="color:#a99cc8"></span>Serviço: <b id="sideSvc">—</b></div>
       <div class="side-row">Versão <b id="sideVer">{{VERSION}}</b></div>
