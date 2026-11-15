@@ -138,6 +138,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/logo.png", s.asset(assets.Glyph256))
 	mux.HandleFunc("/theramais.png", s.asset(assets.TheraMais256))
+	mux.HandleFunc("/theramais.svg", s.assetAs(assets.TheraMaisSVG, "image/svg+xml"))
 	mux.HandleFunc("/favicon.png", s.asset(assets.Glyph64))
 	mux.HandleFunc("/favicon.ico", s.asset(assets.Glyph32))
 	mux.HandleFunc("/api/status", s.wrap(s.handleStatus))
@@ -258,9 +259,12 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func (s *Server) asset(data []byte) http.HandlerFunc {
+func (s *Server) asset(data []byte) http.HandlerFunc { return s.assetAs(data, "image/png") }
+
+func (s *Server) assetAs(data []byte, contentType string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		_, _ = w.Write(data)
 	}

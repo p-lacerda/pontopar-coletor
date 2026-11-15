@@ -193,6 +193,17 @@ func TestLogoServed(t *testing.T) {
 	}
 }
 
+func TestTheraMaisSVGServed(t *testing.T) {
+	s, _ := startTestServer(t)
+	req, _ := http.NewRequest("GET", "http://127.0.0.1/theramais.svg", nil)
+	req.RemoteAddr = "127.0.0.1:1"
+	rw := newRec()
+	s.Handler().ServeHTTP(rw, req)
+	if rw.code != 200 || rw.headers.Get("Content-Type") != "image/svg+xml" || !bytes.Contains(rw.body.Bytes(), []byte("<svg")) {
+		t.Fatalf("logo TheraMais não servido como SVG: %d %q", rw.code, rw.headers.Get("Content-Type"))
+	}
+}
+
 func TestStatusEndpoint(t *testing.T) {
 	s, _ := startTestServer(t)
 	req, _ := http.NewRequest("GET", "http://127.0.0.1/api/status", nil)

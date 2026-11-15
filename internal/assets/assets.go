@@ -58,3 +58,10 @@ func Decode(b []byte) (image.Image, error) { return png.Decode(bytes.NewReader(b
 //
 //go:embed theramais-256.png
 var TheraMais256 []byte
+
+// TheraMaisSVG é o mesmo "T" em vetor (contorno traçado do ícone original +
+// degradê ajustado às cores dele): nítido em qualquer tamanho/DPI. É o que o
+// painel usa; o PNG fica só por compatibilidade com páginas antigas em cache.
+//
+//go:embed theramais.svg
+var TheraMaisSVG []byte
